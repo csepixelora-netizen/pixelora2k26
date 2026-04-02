@@ -1,11 +1,11 @@
 window.__PIXELORA_CONFIG__ = {
-  apiBaseUrl: "https://your-render-service.onrender.com",
+  apiBaseUrl: "https://pixelora-9git.onrender.com",
   firebase: {
-    apiKey: "REPLACE_WITH_API_KEY",
-    authDomain: "REPLACE_WITH_AUTH_DOMAIN",
-    projectId: "REPLACE_WITH_PROJECT_ID",
-    storageBucket: "REPLACE_WITH_STORAGE_BUCKET",
-    messagingSenderId: "REPLACE_WITH_MESSAGING_SENDER_ID",
-    appId: "REPLACE_WITH_APP_ID"
+    apiKey: "AIzaSyCIQpN6-kbbbLYrbuWX33ulmcqa12Gld5w",
+    authDomain: "pixelora-30fdb.firebaseapp.com",
+    projectId: "pixelora-30fdb",
+    storageBucket: "pixelora-30fdb.firebasestorage.app",
+    messagingSenderId: "652438003040",
+    appId: "1:652438003040:web:7160736d896162e39b5205"
   }
 };
