@@ -53,6 +53,14 @@ const regSubmit = document.getElementById('reg-submit');
 const iplSlotCard = document.getElementById('ipl-slot-card');
 const iplSlotForm = document.getElementById('ipl-slot-form');
 const iplFormOption = document.getElementById('ipl-form-option');
+const TECHNICAL_EVENTS_WITHOUT_TEAM_DETAILS = new Set(['Devfolio', 'Promptcraft']);
+const adminPortal = document.getElementById('admin-portal');
+const adminClose = document.getElementById('admin-close');
+const adminRefresh = document.getElementById('admin-refresh');
+const adminDownload = document.getElementById('admin-download');
+const adminSecret = document.getElementById('admin-secret');
+const adminStatus = document.getElementById('admin-status');
+const adminTableBody = document.getElementById('admin-table-body');
 const technicalTeamDetails = document.getElementById('technical-team-details');
 const nonTechnicalTeamDetails = document.getElementById('nontechnical-team-details');
 
@@ -74,6 +82,129 @@ const API_BASE_URL = String(APP_CONFIG.apiBaseUrl || '').trim().replace(/\/+$/, 
 
 function buildApiUrl(path) {
   return API_BASE_URL ? `${API_BASE_URL}${path}` : path;
+}
+
+function getAdminSecretValue() {
+  const savedSecret = localStorage.getItem('pixelora-admin-secret') || '';
+  return adminSecret?.value?.trim() || savedSecret;
+}
+
+function setAdminStatus(message, type) {
+  if (!adminStatus) return;
+  adminStatus.textContent = message;
+  adminStatus.classList.remove('ok', 'err');
+  if (type) adminStatus.classList.add(type);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function formatAdminTeam(team) {
+  if (!team) return '<span>None</span>';
+  const members = Array.isArray(team.members) ? team.members.join(', ') : '';
+  return `
+    <div class="admin-team">
+      <strong>${escapeHtml(team.teamName || '—')}</strong>
+      <span>Leader: ${escapeHtml(team.teamLeader || '—')}</span>
+      <span>Size: ${escapeHtml(team.teamSize || '—')}</span>
+      <span>Members: ${escapeHtml(members || '—')}</span>
+    </div>
+  `;
+}
+
+function renderAdminRegistrations(registrations) {
+  if (!adminTableBody) return;
+
+  if (!registrations.length) {
+    adminTableBody.innerHTML = '<tr><td class="admin-empty" colspan="6">No registrations found.</td></tr>';
+    return;
+  }
+
+  adminTableBody.innerHTML = registrations.map((registration) => `
+    <tr>
+      <td>
+        <strong>${escapeHtml(registration.name)}</strong><br>
+        <span style="opacity:.7">${escapeHtml(registration.email)}</span><br>
+        <span style="opacity:.7">${escapeHtml(registration.whatsapp)}</span>
+      </td>
+      <td>${escapeHtml(registration.year)}</td>
+      <td>${formatAdminTeam(registration.technicalTeam)}</td>
+      <td>${formatAdminTeam(registration.nonTechnicalTeam)}</td>
+      <td>${escapeHtml(registration.food)}</td>
+      <td>${escapeHtml(registration.createdAt)}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadAdminRegistrations() {
+  if (!adminTableBody) return;
+
+  setAdminStatus('Loading registrations...', null);
+  try {
+    const response = await fetch(buildApiUrl('/api/admin/registrations'), {
+      headers: getAdminSecretValue() ? { 'X-Admin-Secret': getAdminSecretValue() } : {}
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail || result.error || 'Unable to load registrations.');
+    }
+
+    renderAdminRegistrations(Array.isArray(result.registrations) ? result.registrations : []);
+    setAdminStatus(`Loaded ${Array.isArray(result.registrations) ? result.registrations.length : 0} registrations.`, 'ok');
+  } catch (error) {
+    setAdminStatus(error.message || 'Unable to load registrations.', 'err');
+    adminTableBody.innerHTML = '<tr><td class="admin-empty" colspan="6">Unable to load registrations.</td></tr>';
+  }
+}
+
+async function downloadAdminCsv() {
+  setAdminStatus('Preparing CSV download...', null);
+  try {
+    const response = await fetch(buildApiUrl('/api/admin/registrations.csv'), {
+      headers: getAdminSecretValue() ? { 'X-Admin-Secret': getAdminSecretValue() } : {}
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.detail || result.error || 'Unable to download CSV.');
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'pixelora-registrations.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setAdminStatus('CSV download started.', 'ok');
+  } catch (error) {
+    setAdminStatus(error.message || 'Unable to download CSV.', 'err');
+  }
+}
+
+function openAdminPortal() {
+  if (!adminPortal) return;
+  adminPortal.classList.add('open');
+  adminPortal.setAttribute('aria-hidden', 'false');
+  const savedSecret = localStorage.getItem('pixelora-admin-secret') || '';
+  if (adminSecret) {
+    adminSecret.value = savedSecret;
+    adminSecret.focus();
+  }
+  loadAdminRegistrations();
+}
+
+function closeAdminPortal() {
+  if (!adminPortal) return;
+  adminPortal.classList.remove('open');
+  adminPortal.setAttribute('aria-hidden', 'true');
 }
 
 // Replace placeholder values with your Firebase project config before deployment.
@@ -193,6 +324,50 @@ async function saveRegistrationToFirebase(registrationData) {
 
 watchIplSlots();
 
+if (adminSecret) {
+  adminSecret.addEventListener('input', () => {
+    localStorage.setItem('pixelora-admin-secret', adminSecret.value.trim());
+  });
+}
+
+if (adminClose) {
+  adminClose.addEventListener('click', closeAdminPortal);
+}
+
+if (adminRefresh) {
+  adminRefresh.addEventListener('click', loadAdminRegistrations);
+}
+
+if (adminDownload) {
+  adminDownload.addEventListener('click', downloadAdminCsv);
+}
+
+addEventListener('keydown', (event) => {
+  const isCtrlF7 = event.ctrlKey && event.key === 'F7';
+  const isMetaF7 = event.metaKey && event.key === 'F7';
+
+  if (isCtrlF7 || isMetaF7) {
+    event.preventDefault();
+    if (adminPortal?.classList.contains('open')) {
+      closeAdminPortal();
+    } else {
+      openAdminPortal();
+    }
+  }
+
+  if (event.key === 'Escape' && adminPortal?.classList.contains('open')) {
+    closeAdminPortal();
+  }
+});
+
+if (adminPortal) {
+  adminPortal.addEventListener('click', (event) => {
+    if (event.target === adminPortal) {
+      closeAdminPortal();
+    }
+  });
+}
+
 if (regForm) {
   regForm.querySelectorAll('input[name="technicalEvents"]').forEach((input) => {
     input.addEventListener('change', () => updateTeamDetails('technical'));
@@ -236,6 +411,10 @@ function getTeamRule(eventName) {
 
 function createTeamDetailsMarkup(groupName, selectedEvent, selectedSize) {
   if (!selectedEvent) return '';
+
+  if (groupName === 'technical' && TECHNICAL_EVENTS_WITHOUT_TEAM_DETAILS.has(selectedEvent)) {
+    return '';
+  }
 
   const safeGroup = groupName === 'technical' ? 'technical' : 'nontechnical';
   const rule = getTeamRule(selectedEvent);
@@ -297,6 +476,12 @@ function updateTeamDetails(groupName) {
   const selectedEvent = regForm.querySelector(`input[name="${eventField}"]:checked`)?.value || '';
   const selectedSize = container.querySelector(`select[name="${groupName}TeamSize"]`)?.value;
 
+  if (isTechnical && TECHNICAL_EVENTS_WITHOUT_TEAM_DETAILS.has(selectedEvent)) {
+    container.classList.add('empty');
+    container.innerHTML = '';
+    return;
+  }
+
   if (!selectedEvent) {
     container.classList.add('empty');
     container.innerHTML = '';
@@ -321,6 +506,13 @@ function collectTeamDetails(groupName, formData) {
 
   if (!selectedEvent) {
     return { ok: false, error: `Please select one ${label} event.` };
+  }
+
+  if (groupName === 'technical' && TECHNICAL_EVENTS_WITHOUT_TEAM_DETAILS.has(selectedEvent)) {
+    return {
+      ok: true,
+      data: { teamName: '', teamLeader: '', teamSize: 1, members: [] }
+    };
   }
 
   const rule = getTeamRule(selectedEvent);

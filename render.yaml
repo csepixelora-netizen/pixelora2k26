@@ -14,3 +14,5 @@ services:
         value: your-project-id.appspot.com
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
         sync: false
+      - key: ADMIN_PORTAL_SECRET
+        sync: false

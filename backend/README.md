@@ -40,6 +40,16 @@ Set these in your Render service:
 
 ## API
 
+### GET `/api/admin/registrations`
+
+Returns all registrations as JSON.
+
+### GET `/api/admin/registrations.csv`
+
+Downloads the registrations as a CSV file.
+
+If `ADMIN_PORTAL_SECRET` is configured in Render, send it in the `X-Admin-Secret` header.
+
 ### POST `/api/registrations`
 
 Multipart form-data fields:

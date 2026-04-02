@@ -4,14 +4,17 @@ import json
 import os
 import re
 import uuid
+from csv import DictWriter
+from io import StringIO
 from datetime import datetime, timezone
 from pathlib import Path
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 # Paths
@@ -49,6 +52,7 @@ app.add_middleware(
 
 FIREBASE_SERVICE_ACCOUNT_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
 FIREBASE_STORAGE_BUCKET = os.getenv("FIREBASE_STORAGE_BUCKET", "").strip()
+ADMIN_PORTAL_SECRET = os.getenv("ADMIN_PORTAL_SECRET", "").strip()
 
 firebase_db = None
 firebase_bucket = None
@@ -91,6 +95,127 @@ EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def require_admin_secret(x_admin_secret: str | None) -> None:
+    if ADMIN_PORTAL_SECRET and x_admin_secret != ADMIN_PORTAL_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid admin secret.")
+
+
+def normalize_record(record: dict) -> dict:
+    created_at_value = record.get("createdAt")
+    if hasattr(created_at_value, "isoformat"):
+        created_at_value = created_at_value.isoformat()
+
+    return {
+        "id": record.get("id", ""),
+        "name": record.get("name", ""),
+        "email": record.get("email", ""),
+        "whatsapp": record.get("whatsapp", ""),
+        "year": record.get("year", ""),
+        "collegeName": record.get("collegeName", ""),
+        "departmentName": record.get("departmentName", ""),
+        "technicalEvents": record.get("technicalEvents", ""),
+        "technicalTeam": record.get("technicalTeam", {}),
+        "nonTechnicalEvents": record.get("nonTechnicalEvents", ""),
+        "nonTechnicalTeam": record.get("nonTechnicalTeam", {}),
+        "food": record.get("food", ""),
+        "paymentScreenshot": record.get("paymentScreenshot", ""),
+        "createdAt": created_at_value or "",
+    }
+
+
+def load_registrations() -> list[dict]:
+    records: list[dict] = []
+
+    if firebase_db is not None:
+        for document in firebase_db.collection("registrations").stream():
+            records.append(normalize_record(document.to_dict() | {"id": document.id}))
+    elif REGISTRATIONS_FILE.exists():
+        with REGISTRATIONS_FILE.open("r", encoding="utf-8") as file:
+            for line in file:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(normalize_record(json.loads(line)))
+                except json.JSONDecodeError:
+                    continue
+
+    records.sort(key=lambda item: str(item.get("createdAt", "")), reverse=True)
+    return records
+
+
+def flatten_registration_for_csv(record: dict) -> dict:
+    technical_team = record.get("technicalTeam") or {}
+    non_technical_team = record.get("nonTechnicalTeam") or {}
+
+    return {
+        "id": record.get("id", ""),
+        "name": record.get("name", ""),
+        "email": record.get("email", ""),
+        "whatsapp": record.get("whatsapp", ""),
+        "year": record.get("year", ""),
+        "collegeName": record.get("collegeName", ""),
+        "departmentName": record.get("departmentName", ""),
+        "technicalEvents": record.get("technicalEvents", ""),
+        "technicalTeamName": technical_team.get("teamName", ""),
+        "technicalTeamLeader": technical_team.get("teamLeader", ""),
+        "technicalTeamSize": technical_team.get("teamSize", ""),
+        "technicalTeamMembers": ", ".join(technical_team.get("members", []) or []),
+        "nonTechnicalEvents": record.get("nonTechnicalEvents", ""),
+        "nonTechnicalTeamName": non_technical_team.get("teamName", ""),
+        "nonTechnicalTeamLeader": non_technical_team.get("teamLeader", ""),
+        "nonTechnicalTeamSize": non_technical_team.get("teamSize", ""),
+        "nonTechnicalTeamMembers": ", ".join(non_technical_team.get("members", []) or []),
+        "food": record.get("food", ""),
+        "paymentScreenshot": record.get("paymentScreenshot", ""),
+        "createdAt": record.get("createdAt", ""),
+    }
+
+
+@app.get("/api/admin/registrations")
+def list_admin_registrations(x_admin_secret: str | None = Header(default=None)) -> dict[str, list[dict]]:
+    require_admin_secret(x_admin_secret)
+    return {"registrations": load_registrations()}
+
+
+@app.get("/api/admin/registrations.csv")
+def download_admin_registrations_csv(x_admin_secret: str | None = Header(default=None)) -> Response:
+    require_admin_secret(x_admin_secret)
+
+    records = [flatten_registration_for_csv(record) for record in load_registrations()]
+    buffer = StringIO()
+    writer = DictWriter(buffer, fieldnames=list(records[0].keys()) if records else [
+        "id",
+        "name",
+        "email",
+        "whatsapp",
+        "year",
+        "collegeName",
+        "departmentName",
+        "technicalEvents",
+        "technicalTeamName",
+        "technicalTeamLeader",
+        "technicalTeamSize",
+        "technicalTeamMembers",
+        "nonTechnicalEvents",
+        "nonTechnicalTeamName",
+        "nonTechnicalTeamLeader",
+        "nonTechnicalTeamSize",
+        "nonTechnicalTeamMembers",
+        "food",
+        "paymentScreenshot",
+        "createdAt",
+    ])
+    writer.writeheader()
+    writer.writerows(records)
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="pixelora-registrations.csv"'},
+    )
 
 
 @app.post("/api/registrations")

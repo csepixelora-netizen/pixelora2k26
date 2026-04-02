@@ -395,6 +395,44 @@
   </div>
 </footer>
 
+<div id="admin-portal" class="admin-portal" aria-hidden="true">
+  <div class="admin-shell" role="dialog" aria-modal="true" aria-labelledby="admin-title">
+    <div class="admin-head">
+      <div>
+        <p class="admin-kicker">Secret Panel</p>
+        <h2 id="admin-title">PIXELORA Admin Portal</h2>
+      </div>
+      <button type="button" class="admin-close" id="admin-close" aria-label="Close admin portal">×</button>
+    </div>
+    <div class="admin-controls">
+      <label class="admin-secret-field">
+        <span>Admin Secret</span>
+        <input type="password" id="admin-secret" placeholder="Enter secret if enabled" autocomplete="off">
+      </label>
+      <div class="admin-actions">
+        <button type="button" class="btn bo admin-btn" id="admin-refresh">Refresh</button>
+        <button type="button" class="btn bm admin-btn" id="admin-download">Download CSV</button>
+      </div>
+    </div>
+    <p id="admin-status" class="admin-status" aria-live="polite"></p>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Year</th>
+            <th>Technical</th>
+            <th>Non-Technical</th>
+            <th>Food</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody id="admin-table-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <!-- Master-Level Polish Dependencies -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vanilla-tilt/1.8.1/vanilla-tilt.min.js"></script>
 <script src="https://unpkg.com/lenis@1.1.20/dist/lenis.min.js"></script>
