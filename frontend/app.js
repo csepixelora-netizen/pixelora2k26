@@ -58,6 +58,7 @@ const adminPortal = document.getElementById('admin-portal');
 const adminClose = document.getElementById('admin-close');
 const adminRefresh = document.getElementById('admin-refresh');
 const adminDownload = document.getElementById('admin-download');
+const adminReset = document.getElementById('admin-reset');
 const adminSecret = document.getElementById('admin-secret');
 const adminStatus = document.getElementById('admin-status');
 const adminTableBody = document.getElementById('admin-table-body');
@@ -76,6 +77,7 @@ const TEAM_RULES = {
 
 const IPL_TOTAL_SLOTS = 10;
 let iplRegisteredTeams = 0;
+let iplStatusPollHandle = null;
 
 const APP_CONFIG = window.__PIXELORA_CONFIG__ || {};
 const API_BASE_URL = String(APP_CONFIG.apiBaseUrl || '').trim().replace(/\/+$/, '');
@@ -207,28 +209,28 @@ function closeAdminPortal() {
   adminPortal.setAttribute('aria-hidden', 'true');
 }
 
-// Replace placeholder values with your Firebase project config before deployment.
-const FIREBASE_CONFIG = {
-  apiKey: APP_CONFIG.firebase?.apiKey || 'REPLACE_WITH_API_KEY',
-  authDomain: APP_CONFIG.firebase?.authDomain || 'REPLACE_WITH_AUTH_DOMAIN',
-  projectId: APP_CONFIG.firebase?.projectId || 'REPLACE_WITH_PROJECT_ID',
-  storageBucket: APP_CONFIG.firebase?.storageBucket || 'REPLACE_WITH_STORAGE_BUCKET',
-  messagingSenderId: APP_CONFIG.firebase?.messagingSenderId || 'REPLACE_WITH_MESSAGING_SENDER_ID',
-  appId: APP_CONFIG.firebase?.appId || 'REPLACE_WITH_APP_ID'
-};
-
-function hasFirebaseConfig(config) {
-  return Object.values(config).every((value) => value && !String(value).startsWith('REPLACE_WITH_'));
-}
-
-let firebaseDb = null;
-if (typeof firebase !== 'undefined' && hasFirebaseConfig(FIREBASE_CONFIG)) {
-  const app = firebase.apps && firebase.apps.length ? firebase.app() : firebase.initializeApp(FIREBASE_CONFIG);
-  firebaseDb = app.firestore();
-}
-
 function getIplSlotsLeft() {
   return Math.max(0, IPL_TOTAL_SLOTS - iplRegisteredTeams);
+}
+
+function applyIplSlotStatus(status) {
+  const registered = Number(status?.registered || 0);
+  iplRegisteredTeams = Math.min(IPL_TOTAL_SLOTS, Math.max(0, registered));
+  updateIplSlotUI();
+}
+
+async function loadIplSlotStatus() {
+  try {
+    const response = await fetch(buildApiUrl('/api/slots/ipl-auction'));
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail || result.error || 'Unable to load slot status.');
+    }
+
+    applyIplSlotStatus(result);
+  } catch (_error) {
+    updateIplSlotUI();
+  }
 }
 
 function updateIplSlotUI() {
@@ -255,63 +257,13 @@ function updateIplSlotUI() {
 }
 
 function watchIplSlots() {
-  if (!firebaseDb) {
-    updateIplSlotUI();
-    return;
+  loadIplSlotStatus();
+
+  if (iplStatusPollHandle) {
+    clearInterval(iplStatusPollHandle);
   }
 
-  firebaseDb.collection('slotCounters').doc('iplAuction').onSnapshot(
-    (snapshot) => {
-      const registered = Number(snapshot.data()?.registered || 0);
-      iplRegisteredTeams = Math.min(IPL_TOTAL_SLOTS, Math.max(0, registered));
-      updateIplSlotUI();
-    },
-    () => {
-      updateIplSlotUI();
-    }
-  );
-}
-
-async function reserveIplSlot() {
-  if (!firebaseDb) return false;
-
-  const slotRef = firebaseDb.collection('slotCounters').doc('iplAuction');
-  await firebaseDb.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(slotRef);
-    const current = Number(snapshot.data()?.registered || 0);
-    if (current >= IPL_TOTAL_SLOTS) {
-      throw new Error('IPL Auction slots are full. Please select another non-technical event.');
-    }
-
-    transaction.set(
-      slotRef,
-      {
-        registered: current + 1,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
-  });
-
-  return true;
-}
-
-async function releaseIplSlot() {
-  if (!firebaseDb) return;
-
-  const slotRef = firebaseDb.collection('slotCounters').doc('iplAuction');
-  await firebaseDb.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(slotRef);
-    const current = Number(snapshot.data()?.registered || 0);
-    transaction.set(
-      slotRef,
-      {
-        registered: Math.max(0, current - 1),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
-  });
+  iplStatusPollHandle = setInterval(loadIplSlotStatus, 30000);
 }
 
 watchIplSlots();
@@ -332,6 +284,40 @@ if (adminRefresh) {
 
 if (adminDownload) {
   adminDownload.addEventListener('click', downloadAdminCsv);
+}
+
+async function resetAllRegistrations() {
+  const adminSecretValue = getAdminSecretValue();
+  if (!adminSecretValue) {
+    setAdminStatus('Admin secret is required to delete data.', 'err');
+    return;
+  }
+
+  const confirmed = window.confirm('Delete all registrations and reset IPL slots back to 10?');
+  if (!confirmed) return;
+
+  setAdminStatus('Deleting all registration data...', null);
+  try {
+    const response = await fetch(buildApiUrl('/api/admin/registrations'), {
+      method: 'DELETE',
+      headers: { 'X-Admin-Secret': adminSecretValue }
+    });
+
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.detail || result.error || 'Unable to delete registrations.');
+    }
+
+    applyIplSlotStatus(result);
+    await loadAdminRegistrations();
+    setAdminStatus('All registrations deleted. IPL slots are reset to 10.', 'ok');
+  } catch (error) {
+    setAdminStatus(error.message || 'Unable to delete registrations.', 'err');
+  }
+}
+
+if (adminReset) {
+  adminReset.addEventListener('click', resetAllRegistrations);
 }
 
 addEventListener('keydown', (event) => {
@@ -615,13 +601,7 @@ if (regForm && regSubmit) {
     regSubmit.textContent = 'Submitting...';
     setRegStatus('Submitting your registration...', null);
 
-    let slotReserved = false;
-
     try {
-      if (selectedIplAuction) {
-        slotReserved = await reserveIplSlot();
-      }
-
       const response = await fetch(buildApiUrl('/api/registrations'), {
         method: 'POST',
         body: formData
@@ -634,15 +614,9 @@ if (regForm && regSubmit) {
 
       regForm.reset();
       refreshTeamDetails();
+      await loadIplSlotStatus();
       setRegStatus('Registered successfully. See you at PIXELORA 2K26!', 'ok');
     } catch (error) {
-      if (slotReserved) {
-        try {
-          await releaseIplSlot();
-        } catch (_releaseError) {
-          // If rollback fails, live counter listener will still correct on next successful write.
-        }
-      }
       setRegStatus(error.message || 'Unable to submit right now. Try again later.', 'err');
     } finally {
       regSubmit.disabled = false;

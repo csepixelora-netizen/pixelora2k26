@@ -171,6 +171,20 @@ def load_registrations() -> list[dict]:
     return records
 
 
+def count_ipl_auction_registrations(records: list[dict] | None = None) -> int:
+    registration_records = records if records is not None else load_registrations()
+    return sum(1 for record in registration_records if record.get("nonTechnicalEvents") == "IPL Auction")
+
+
+def get_ipl_slot_status() -> dict[str, int]:
+    registered = count_ipl_auction_registrations()
+    return {
+        "total": IPL_TOTAL_SLOTS,
+        "registered": registered,
+        "available": max(0, IPL_TOTAL_SLOTS - registered),
+    }
+
+
 def sync_local_registrations_to_firestore() -> None:
     if firebase_db is None:
         return
@@ -188,6 +202,49 @@ def save_registration_record(record: dict) -> None:
 
     if firebase_db is not None:
         firebase_db.collection("registrations").document(str(record["id"])).set(record)
+
+
+def delete_registration_storage() -> None:
+    if firebase_bucket is not None:
+        for blob in firebase_bucket.list_blobs(prefix="payment_screenshots/"):
+            blob.delete()
+
+    if UPLOAD_DIR.exists():
+        for file_path in UPLOAD_DIR.iterdir():
+            if file_path.is_file():
+                file_path.unlink()
+
+
+def delete_all_registrations() -> int:
+    existing_records = load_registrations()
+
+    if firebase_db is not None:
+        batch = firebase_db.batch()
+        operations = 0
+        for record in existing_records:
+            record_id = str(record.get("id", "")).strip()
+            if not record_id:
+                continue
+            batch.delete(firebase_db.collection("registrations").document(record_id))
+            operations += 1
+            if operations >= 450:
+                batch.commit()
+                batch = firebase_db.batch()
+                operations = 0
+
+        if operations:
+            batch.commit()
+
+        try:
+            firebase_db.collection("slotCounters").document("iplAuction").delete()
+        except Exception:
+            pass
+
+    if REGISTRATIONS_FILE.exists():
+        REGISTRATIONS_FILE.write_text("", encoding="utf-8")
+
+    delete_registration_storage()
+    return len(existing_records)
 
 
 @app.on_event("startup")
@@ -267,6 +324,18 @@ def download_admin_registrations_csv(x_admin_secret: str | None = Header(default
     )
 
 
+@app.get("/api/slots/ipl-auction")
+def get_ipl_auction_slots() -> dict[str, int]:
+    return get_ipl_slot_status()
+
+
+@app.delete("/api/admin/registrations")
+def clear_admin_registrations(x_admin_secret: str | None = Header(default=None)) -> dict[str, int]:
+    require_admin_secret(x_admin_secret)
+    deleted = delete_all_registrations()
+    return {"deleted": deleted, "remaining": 0, "registered": 0, "available": IPL_TOTAL_SLOTS, "total": IPL_TOTAL_SLOTS}
+
+
 @app.post("/api/registrations")
 async def create_registration(
     name: str = Form(...),
@@ -332,6 +401,9 @@ async def create_registration(
 
     if nonTechnicalEvents not in ALLOWED_NON_TECHNICAL_EVENTS:
         raise HTTPException(status_code=400, detail="Invalid non-technical event selection.")
+
+    if nonTechnicalEvents == "IPL Auction" and count_ipl_auction_registrations() >= IPL_TOTAL_SLOTS:
+        raise HTTPException(status_code=400, detail="IPL Auction slots are full. Please select another non-technical event.")
 
     if food not in ALLOWED_FOOD:
         raise HTTPException(status_code=400, detail="Invalid food selection.")
