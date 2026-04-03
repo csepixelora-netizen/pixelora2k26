@@ -8,6 +8,7 @@ from csv import DictWriter
 from io import StringIO
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
@@ -38,7 +39,24 @@ def parse_allowed_origins(raw_value: str) -> list[str]:
         return ["*"]
 
     parsed = [origin.strip() for origin in raw_value.split(",") if origin.strip()]
-    cleaned = [origin for origin in parsed if "your-github-username.github.io" not in origin]
+
+    def normalize_origin(value: str) -> str:
+        trimmed = value.strip().rstrip("/")
+        if not trimmed:
+            return ""
+
+        parsed_url = urlparse(trimmed)
+        if parsed_url.scheme and parsed_url.netloc:
+            return f"{parsed_url.scheme}://{parsed_url.netloc}"
+
+        return trimmed
+
+    cleaned = [
+        normalize_origin(origin)
+        for origin in parsed
+        if "your-github-username.github.io" not in origin
+    ]
+    cleaned = [origin for origin in cleaned if origin]
     return cleaned if cleaned else ["*"]
 
 
