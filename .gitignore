@@ -1,7 +1,35 @@
-﻿.venv/
-pycache/
-*.pyc
+﻿# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment and local secrets
 .env
+.env.*
+!.env.example
+
+# Backend runtime/generated data
 backend/data/
 backend/uploads/
 backend/firebase-service-account.json
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
