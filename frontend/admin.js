@@ -76,7 +76,9 @@ function resolvePaymentScreenshotUrl(reference) {
   const value = String(reference || '').trim();
   if (!value) return '';
   if (/^https?:\/\//i.test(value)) return value;
-  return value.startsWith('/') ? value : `/${value}`;
+
+  const normalizedPath = value.startsWith('/') ? value : `/${value}`;
+  return buildApiUrl(normalizedPath);
 }
 
 function renderPaymentScreenshotCell(reference) {
