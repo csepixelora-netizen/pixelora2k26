@@ -427,10 +427,15 @@ async def create_registration(
     payment_screenshot_ref = f"uploads/payment_screenshots/{image_filename}"
 
     if firebase_bucket is not None:
-        blob = firebase_bucket.blob(f"payment_screenshots/{image_filename}")
-        blob.upload_from_string(image_bytes, content_type=paymentScreenshot.content_type or "image/jpeg")
-        blob.make_public()
-        payment_screenshot_ref = blob.public_url
+        try:
+            blob = firebase_bucket.blob(f"payment_screenshots/{image_filename}")
+            blob.upload_from_string(image_bytes, content_type=paymentScreenshot.content_type or "image/jpeg")
+            blob.make_public()
+            payment_screenshot_ref = blob.public_url
+        except Exception:
+            # If cloud upload fails (for example invalid/missing bucket), keep accepting
+            # registrations by storing screenshots locally.
+            image_path.write_bytes(image_bytes)
     else:
         image_path.write_bytes(image_bytes)
 
