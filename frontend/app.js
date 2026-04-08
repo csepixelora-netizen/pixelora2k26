@@ -990,7 +990,12 @@ function updateProgressLabels() {
 }
 
 function shouldShowMemberStep() {
-  return isTeamEvent(getSelectedEvent('technical')) || registrationState.teamMembers.length > 0 || Boolean(registrationState.draftMember);
+  return (
+    isTeamEvent(getSelectedEvent('technical')) ||
+    isTeamEvent(getSelectedEvent('nontechnical')) ||
+    registrationState.teamMembers.length > 0 ||
+    Boolean(registrationState.draftMember)
+  );
 }
 
 function showStep(step) {
@@ -1054,23 +1059,33 @@ function syncEventSelectionFromForm() {
   registrationState.selectedEvents = { technical: technicalEvent, nonTechnical: nonTechnicalEvent };
 
   const technicalTeamEnabled = Boolean(technicalEvent) && isTeamEvent(technicalEvent);
+  const nonTechnicalTeamEnabled = Boolean(nonTechnicalEvent) && isTeamEvent(nonTechnicalEvent);
   registrationState.teamMembers = registrationState.teamMembers
     .map((member) => {
-      const nextMember = { ...member, nonTechnicalEvent: '', nontechnical_used: false };
+      const nextMember = { ...member };
       if (!technicalTeamEnabled || nextMember.technicalEvent !== technicalEvent) {
         nextMember.technicalEvent = '';
         nextMember.technical_used = false;
       }
+
+      if (!nonTechnicalTeamEnabled || nextMember.nonTechnicalEvent !== nonTechnicalEvent) {
+        nextMember.nonTechnicalEvent = '';
+        nextMember.nontechnical_used = false;
+      }
+
       return nextMember;
     })
-    .filter((member) => technicalTeamEnabled ? true : false);
+    .filter((member) => Boolean(member.technicalEvent || member.nonTechnicalEvent));
 
   if (registrationState.draftMember) {
-    registrationState.draftMember.nonTechnicalEvent = '';
-    registrationState.draftMember.nontechnical_used = false;
     if (!technicalTeamEnabled || registrationState.draftMember.technicalEvent !== technicalEvent) {
       registrationState.draftMember.technicalEvent = '';
       registrationState.draftMember.technical_used = false;
+    }
+
+    if (!nonTechnicalTeamEnabled || registrationState.draftMember.nonTechnicalEvent !== nonTechnicalEvent) {
+      registrationState.draftMember.nonTechnicalEvent = '';
+      registrationState.draftMember.nontechnical_used = false;
     }
   }
 
@@ -1172,10 +1187,17 @@ function validateMemberConflicts(memberDraft) {
 
 function validateTeamRequirements() {
   const technicalRequirement = getTeamRequirement('technical');
+  const nonTechnicalRequirement = getTeamRequirement('nontechnical');
 
   if (technicalRequirement.eventName && isTeamEvent(technicalRequirement.eventName)) {
     if (technicalRequirement.assignedMembers.length < technicalRequirement.requiredMembers) {
       return `${technicalRequirement.eventName} needs ${technicalRequirement.requiredMembers} member${technicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.`;
+    }
+  }
+
+  if (nonTechnicalRequirement.eventName && isTeamEvent(nonTechnicalRequirement.eventName)) {
+    if (nonTechnicalRequirement.assignedMembers.length < nonTechnicalRequirement.requiredMembers) {
+      return `${nonTechnicalRequirement.eventName} needs ${nonTechnicalRequirement.requiredMembers} member${nonTechnicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.`;
     }
   }
 
@@ -1188,6 +1210,9 @@ function openMemberEditor(memberId = '') {
 
   const selectedTechnicalEvent = getSelectedEvent('technical');
   const technicalTeamEnabled = Boolean(selectedTechnicalEvent) && isTeamEvent(selectedTechnicalEvent);
+  const selectedNonTechnicalEvent = getSelectedEvent('nontechnical');
+  const nonTechnicalTeamEnabled = Boolean(selectedNonTechnicalEvent) && isTeamEvent(selectedNonTechnicalEvent);
+
   if (!technicalTeamEnabled) {
     registrationState.draftMember.technicalEvent = '';
     registrationState.draftMember.technical_used = false;
@@ -1196,8 +1221,13 @@ function openMemberEditor(memberId = '') {
     registrationState.draftMember.technical_used = false;
   }
 
-  registrationState.draftMember.nonTechnicalEvent = '';
-  registrationState.draftMember.nontechnical_used = false;
+  if (!nonTechnicalTeamEnabled) {
+    registrationState.draftMember.nonTechnicalEvent = '';
+    registrationState.draftMember.nontechnical_used = false;
+  } else if (registrationState.draftMember.nonTechnicalEvent && registrationState.draftMember.nonTechnicalEvent !== selectedNonTechnicalEvent) {
+    registrationState.draftMember.nonTechnicalEvent = '';
+    registrationState.draftMember.nontechnical_used = false;
+  }
 
   persistRegistrationState();
   renderRegistrationWizard();
