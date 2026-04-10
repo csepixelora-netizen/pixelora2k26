@@ -105,8 +105,21 @@ ALLOWED_TECHNICAL_EVENTS = {"Innopitch", "Devfolio", "Promptcraft"}
 ALLOWED_NON_TECHNICAL_EVENTS = {
     "E-Sports (Free fire)",
     "IPL Auction",
+    "Visual Content",
     "Visual Connect",
     "Channel Surfing",
+}
+EVENT_NAME_ALIASES = {
+    "Visual Connect": "Visual Content",
+}
+TEAM_SIZE_RULES = {
+    "Innopitch": {"min": 1, "max": 3},
+    "Devfolio": {"min": 1, "max": 1},
+    "Promptcraft": {"min": 1, "max": 1},
+    "E-Sports (Free fire)": {"min": 4, "max": 4},
+    "IPL Auction": {"min": 4, "max": 4},
+    "Visual Content": {"min": 2, "max": 2},
+    "Channel Surfing": {"min": 3, "max": 3},
 }
 ALLOWED_FOOD = {"Veg", "Non-Veg"}
 IPL_TOTAL_SLOTS = 10
@@ -122,6 +135,45 @@ def health() -> dict[str, str]:
 def require_admin_secret(x_admin_secret: str | None) -> None:
     if ADMIN_PORTAL_SECRET and x_admin_secret != ADMIN_PORTAL_SECRET:
         raise HTTPException(status_code=403, detail="Invalid admin secret.")
+
+
+def normalize_event_name(event_name: str) -> str:
+    normalized = event_name.strip()
+    return EVENT_NAME_ALIASES.get(normalized, normalized)
+
+
+def validate_team_size(event_name: str, members: list[str], team_size_raw: str | None, category_label: str) -> None:
+    if not event_name:
+        return
+
+    rule = TEAM_SIZE_RULES.get(event_name, {"min": 1, "max": 1})
+    actual_size = len(members) + 1
+    min_size = int(rule["min"])
+    max_size = int(rule["max"])
+
+    if actual_size < min_size or actual_size > max_size:
+        if min_size == max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{category_label} team size for {event_name} must be exactly {min_size} members.",
+            )
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"{category_label} team size for {event_name} must be between {min_size} and {max_size} members.",
+        )
+
+    if team_size_raw:
+        try:
+            submitted_size = int(team_size_raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid {category_label.lower()} team size value.")
+
+        if submitted_size != actual_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{category_label} team size mismatch for {event_name}.",
+            )
 
 
 def normalize_record(record: dict) -> dict:
@@ -367,8 +419,8 @@ async def create_registration(
     year: str = Form(...),
     collegeName: str = Form(...),
     departmentName: str = Form(...),
-    technicalEvents: str = Form(...),
-    nonTechnicalEvents: str = Form(...),
+    technicalEvents: str = Form(""),
+    nonTechnicalEvents: str = Form(""),
     technicalTeamName: str | None = Form(None),
     technicalTeamLeader: str | None = Form(None),
     technicalTeamSize: str | None = Form(None),
@@ -402,20 +454,11 @@ async def create_registration(
     sessionData = (sessionData or '').strip() or None
     teamMembers = (teamMembers or '').strip() or None
 
-    if not all(
-        [
-            name,
-            email,
-            whatsapp,
-            year,
-            collegeName,
-            departmentName,
-            technicalEvents,
-            nonTechnicalEvents,
-            food,
-        ]
-    ):
+    if not all([name, email, whatsapp, year, collegeName, departmentName, food]):
         raise HTTPException(status_code=400, detail="All fields are required.")
+
+    if not technicalEvents and not nonTechnicalEvents:
+        raise HTTPException(status_code=400, detail="Select at least one event.")
 
     if not EMAIL_PATTERN.match(email):
         raise HTTPException(status_code=400, detail="Invalid email format.")
@@ -423,10 +466,13 @@ async def create_registration(
     if year not in ALLOWED_YEARS:
         raise HTTPException(status_code=400, detail="Invalid year selection.")
 
-    if technicalEvents not in ALLOWED_TECHNICAL_EVENTS:
+    technicalEvents = normalize_event_name(technicalEvents)
+    nonTechnicalEvents = normalize_event_name(nonTechnicalEvents)
+
+    if technicalEvents and technicalEvents not in ALLOWED_TECHNICAL_EVENTS:
         raise HTTPException(status_code=400, detail="Invalid technical event selection.")
 
-    if nonTechnicalEvents not in ALLOWED_NON_TECHNICAL_EVENTS:
+    if nonTechnicalEvents and nonTechnicalEvents not in ALLOWED_NON_TECHNICAL_EVENTS:
         raise HTTPException(status_code=400, detail="Invalid non-technical event selection.")
 
     if nonTechnicalEvents == "IPL Auction" and count_ipl_auction_registrations() >= IPL_TOTAL_SLOTS:
@@ -506,6 +552,9 @@ async def create_registration(
             ]
         except json.JSONDecodeError:
             parsed_team_members = []
+
+    validate_team_size(technicalEvents, parsed_technical_members, technicalTeamSize, "Technical")
+    validate_team_size(nonTechnicalEvents, parsed_nontechnical_members, nonTechnicalTeamSize, "Non-technical")
 
     record = {
         "id": registration_id,

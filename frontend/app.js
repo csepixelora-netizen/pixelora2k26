@@ -63,11 +63,11 @@ const adminStatus = document.getElementById('admin-status');
 const adminTableBody = document.getElementById('admin-table-body');
 
 const TEAM_RULES = {
-  Innopitch: { min: 3, max: 3 },
+  Innopitch: { min: 1, max: 3 },
   'E-Sports (Free fire)': { min: 4, max: 4 },
   'IPL Auction': { min: 4, max: 4 },
   'Channel Surfing': { min: 3, max: 3 },
-  'Visual Connect': { min: 1, max: 3 },
+  'Visual Content': { min: 2, max: 2 },
   Devfolio: { min: 1, max: 1 },
   Promptcraft: { min: 1, max: 1 }
 };
@@ -443,7 +443,7 @@ const CATEGORY_EVENTS = {
   nontechnical: [
     { value: 'E-Sports (Free fire)', label: 'E-Sports (Free fire)' },
     { value: 'IPL Auction', label: 'IPL Auction' },
-    { value: 'Visual Connect', label: 'Visual Connect' },
+    { value: 'Visual Content', label: 'Visual Content' },
     { value: 'Channel Surfing', label: 'Channel Surfing' }
   ]
 };
@@ -479,7 +479,9 @@ const registrationDom = {
   finalReview: document.getElementById('final-review'),
   paymentTotal: document.getElementById('payment-total'),
   paymentQr: document.getElementById('payment-qr'),
-  upiIdText: document.getElementById('upi-id-text')
+  upiIdText: document.getElementById('upi-id-text'),
+  technicalEventsGroup: document.getElementById('technical-events-group'),
+  nonTechnicalEventsGroup: document.getElementById('nontechnical-events-group')
 };
 
 const registrationInputs = {
@@ -490,6 +492,7 @@ const registrationInputs = {
   collegeName: regForm?.elements.namedItem('collegeName'),
   departmentName: regForm?.elements.namedItem('departmentName'),
   food: regForm?.elements.namedItem('food'),
+  registrationTrack: Array.from(regForm?.querySelectorAll('input[name="registrationTrack"]') || []),
   technicalEvents: Array.from(regForm?.querySelectorAll('input[name="technicalEvents"]') || []),
   nonTechnicalEvents: Array.from(regForm?.querySelectorAll('input[name="nonTechnicalEvents"]') || []),
   paymentScreenshot: regForm?.elements.namedItem('paymentScreenshot')
@@ -537,6 +540,7 @@ function createEmptyRegistrationState() {
     step: 1,
     nextMemberIndex: 2,
     mainUser: blankMainUser(),
+    registrationTrack: 'both',
     selectedEvents: { technical: '', nonTechnical: '' },
     teamMembers: [],
     draftMember: null,
@@ -574,6 +578,10 @@ function normalizeRegistrationState(rawState) {
     teamMembers: Array.isArray(rawState.teamMembers) ? rawState.teamMembers.map(normalizeMember).filter((member) => member.memberId) : [],
     draftMember: rawState.draftMember ? normalizeMember(rawState.draftMember) : null
   };
+
+  state.registrationTrack = ['both', 'technical', 'nontechnical'].includes(String(rawState.registrationTrack || '').toLowerCase())
+    ? String(rawState.registrationTrack).toLowerCase()
+    : 'both';
 
   state.step = REGISTRATION_STEP_IDS.includes(Number(state.step)) ? Number(state.step) : 1;
 
@@ -643,6 +651,16 @@ function isTeamEvent(eventName) {
   return (getTeamRule(eventName).max || 1) > 1;
 }
 
+function getSelectedTrack() {
+  return String(registrationState.registrationTrack || 'both').toLowerCase();
+}
+
+function isTrackEnabled(trackName) {
+  const selectedTrack = getSelectedTrack();
+  if (selectedTrack === 'both') return true;
+  return selectedTrack === trackName;
+}
+
 function getSelectedEvent(category) {
   return String(registrationState.selectedEvents?.[category === 'technical' ? 'technical' : 'nonTechnical'] || '').trim();
 }
@@ -698,12 +716,12 @@ function renderEventSummary() {
       <div class="review-card">
         <h5>Technical</h5>
         <p>${escapeHtml(technicalEvent || 'Not selected')}</p>
-        <p>${technicalRequirement.totalMin > 1 ? `Team required: ${technicalRequirement.requiredMembers} member${technicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'Solo or optional team format.'}</p>
+        <p>${technicalRequirement.totalMin > 1 ? `Team required: ${technicalRequirement.requiredMembers} member${technicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'As per rules.'}</p>
       </div>
       <div class="review-card">
         <h5>Non-Technical</h5>
         <p>${escapeHtml(nonTechnicalEvent || 'Not selected')}</p>
-        <p>${nonTechnicalRequirement.totalMin > 1 ? `Team required: ${nonTechnicalRequirement.requiredMembers} member${nonTechnicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'Solo or optional team format.'}</p>
+        <p>${nonTechnicalRequirement.totalMin > 1 ? `Team required: ${nonTechnicalRequirement.requiredMembers} member${nonTechnicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'As per rules.'}</p>
       </div>
     </div>
   `;
@@ -718,7 +736,7 @@ function renderEventSummary() {
 
   registrationDom.teamNote.innerHTML = lines.length
     ? lines.join('<br>')
-    : (needsMemberStep ? 'Add members if your chosen events need a team.' : 'Both selected events can continue directly to the review step.');
+    : (needsMemberStep ? 'Add members if your chosen events need a team.' : 'You can continue directly to review.');
 }
 
 function renderMemberEventFields(memberDraft) {
@@ -729,36 +747,16 @@ function renderMemberEventFields(memberDraft) {
   const selectedNonTechnicalEvent = getSelectedEvent('nontechnical');
   const nonTechnicalTeamEnabled = Boolean(selectedNonTechnicalEvent) && isTeamEvent(selectedNonTechnicalEvent);
 
-  // Solo technical events: Devfolio, Promptcraft
-  const soloTechnicalEvents = ['Devfolio', 'Promptcraft'];
-  // Solo non-technical events: Visual Connect, Channel Surfing
-  const soloNonTechnicalEvents = ['Visual Connect', 'Channel Surfing'];
-
   let technicalEventHtml = '';
   if (technicalTeamEnabled) {
     technicalEventHtml = `
       <div class="member-event-group">
         <h6>Technical Event</h6>
         <div class="reg-field">
-          <span>Members can join the selected team event or solo events</span>
+          <span>Select the technical team event for this member</span>
           <select id="member-technical-event" name="memberTechnicalEvent">
             <option value="">Select event</option>
-            <option value="${escapeHtml(selectedTechnicalEvent)}" ${memberDraft.technicalEvent === selectedTechnicalEvent ? 'selected' : ''}>${escapeHtml(selectedTechnicalEvent)} (Team)</option>
-            ${soloTechnicalEvents.map(event => `<option value="${escapeHtml(event)}" ${memberDraft.technicalEvent === event ? 'selected' : ''}>${escapeHtml(event)} (Solo)</option>`).join('')}
-          </select>
-        </div>
-      </div>
-    `;
-  } else {
-    // Show solo technical events even if no team event is selected
-    technicalEventHtml = `
-      <div class="member-event-group">
-        <h6>Technical Event</h6>
-        <div class="reg-field">
-          <span>Members can select solo technical events</span>
-          <select id="member-technical-event" name="memberTechnicalEvent">
-            <option value="">Select event (optional)</option>
-            ${soloTechnicalEvents.map(event => `<option value="${escapeHtml(event)}" ${memberDraft.technicalEvent === event ? 'selected' : ''}>${escapeHtml(event)} (Solo)</option>`).join('')}
+            <option value="${escapeHtml(selectedTechnicalEvent)}" ${memberDraft.technicalEvent === selectedTechnicalEvent ? 'selected' : ''}>${escapeHtml(selectedTechnicalEvent)}</option>
           </select>
         </div>
       </div>
@@ -771,32 +769,17 @@ function renderMemberEventFields(memberDraft) {
       <div class="member-event-group">
         <h6>Non-Technical Event</h6>
         <div class="reg-field">
-          <span>Members can join the selected team event or solo events</span>
+          <span>Select the non-technical team event for this member</span>
           <select id="member-nontechnical-event" name="memberNonTechnicalEvent">
             <option value="">Select event</option>
-            <option value="${escapeHtml(selectedNonTechnicalEvent)}" ${memberDraft.nonTechnicalEvent === selectedNonTechnicalEvent ? 'selected' : ''}>${escapeHtml(selectedNonTechnicalEvent)} (Team)</option>
-            ${soloNonTechnicalEvents.map(event => `<option value="${escapeHtml(event)}" ${memberDraft.nonTechnicalEvent === event ? 'selected' : ''}>${escapeHtml(event)} (Solo)</option>`).join('')}
-          </select>
-        </div>
-      </div>
-    `;
-  } else {
-    // Show solo non-technical events even if no team event is selected
-    nonTechnicalEventHtml = `
-      <div class="member-event-group">
-        <h6>Non-Technical Event</h6>
-        <div class="reg-field">
-          <span>Members can select solo non-technical events</span>
-          <select id="member-nontechnical-event" name="memberNonTechnicalEvent">
-            <option value="">Select event (optional)</option>
-            ${soloNonTechnicalEvents.map(event => `<option value="${escapeHtml(event)}" ${memberDraft.nonTechnicalEvent === event ? 'selected' : ''}>${escapeHtml(event)} (Solo)</option>`).join('')}
+            <option value="${escapeHtml(selectedNonTechnicalEvent)}" ${memberDraft.nonTechnicalEvent === selectedNonTechnicalEvent ? 'selected' : ''}>${escapeHtml(selectedNonTechnicalEvent)}</option>
           </select>
         </div>
       </div>
     `;
   }
 
-  registrationDom.memberEventFields.innerHTML = `${technicalEventHtml}${nonTechnicalEventHtml}`;
+  registrationDom.memberEventFields.innerHTML = `${technicalEventHtml}${nonTechnicalEventHtml}` || '<p class="member-empty">No team event is selected.</p>';
 
   const technicalSelect = document.getElementById('member-technical-event');
   if (technicalSelect) {
@@ -910,6 +893,33 @@ function updateMainUserInputs() {
 
   registrationInputs.nonTechnicalEvents.forEach((input) => {
     input.checked = registrationState.selectedEvents.nonTechnical === input.value;
+  });
+
+  registrationInputs.registrationTrack.forEach((input) => {
+    input.checked = getSelectedTrack() === String(input.value || '').toLowerCase();
+  });
+}
+
+function applyTrackSelectionUI() {
+  const allowTechnical = isTrackEnabled('technical');
+  const allowNonTechnical = isTrackEnabled('nontechnical');
+
+  if (registrationDom.technicalEventsGroup) {
+    registrationDom.technicalEventsGroup.classList.toggle('hidden', !allowTechnical);
+  }
+
+  if (registrationDom.nonTechnicalEventsGroup) {
+    registrationDom.nonTechnicalEventsGroup.classList.toggle('hidden', !allowNonTechnical);
+  }
+
+  registrationInputs.technicalEvents.forEach((input) => {
+    input.disabled = !allowTechnical;
+    if (!allowTechnical) input.checked = false;
+  });
+
+  registrationInputs.nonTechnicalEvents.forEach((input) => {
+    input.disabled = !allowNonTechnical;
+    if (!allowNonTechnical) input.checked = false;
   });
 }
 
@@ -1054,6 +1064,10 @@ function syncMainUserFromForm() {
 }
 
 function syncEventSelectionFromForm() {
+  registrationState.registrationTrack = registrationInputs.registrationTrack.find((input) => input.checked)?.value || 'both';
+
+  applyTrackSelectionUI();
+
   const technicalEvent = registrationInputs.technicalEvents.find((input) => input.checked)?.value || '';
   const nonTechnicalEvent = registrationInputs.nonTechnicalEvents.find((input) => input.checked)?.value || '';
   registrationState.selectedEvents = { technical: technicalEvent, nonTechnical: nonTechnicalEvent };
@@ -1117,8 +1131,24 @@ function validateMainUserStep() {
 }
 
 function validateEventStep() {
-  if (!registrationState.selectedEvents.technical) return 'Please select one technical event.';
-  if (!registrationState.selectedEvents.nonTechnical) return 'Please select one non-technical event.';
+  const selectedTrack = getSelectedTrack();
+
+  if (selectedTrack === 'technical' && !registrationState.selectedEvents.technical) {
+    return 'Please select one technical event.';
+  }
+
+  if (selectedTrack === 'nontechnical' && !registrationState.selectedEvents.nonTechnical) {
+    return 'Please select one non-technical event.';
+  }
+
+  if (selectedTrack === 'both') {
+    if (!registrationState.selectedEvents.technical) return 'Please select one technical event.';
+    if (!registrationState.selectedEvents.nonTechnical) return 'Please select one non-technical event.';
+  }
+
+  if (!registrationState.selectedEvents.technical && !registrationState.selectedEvents.nonTechnical) {
+    return 'Please select at least one event.';
+  }
 
   if (registrationState.selectedEvents.nonTechnical === 'IPL Auction' && getIplSlotsLeft() <= 0) {
     return 'IPL Auction slots are full. Please choose another non-technical event.';
@@ -1135,28 +1165,25 @@ function validateMemberDraft(memberDraft) {
   if (!String(memberDraft.phone || '').trim()) return 'Please enter the member phone.';
   if (!/^\S+@\S+\.\S+$/.test(memberDraft.email)) return 'Please enter a valid member email address.';
 
-  // Member can select any valid event (team or solo)
-  const soloTechnicalEvents = ['Devfolio', 'Promptcraft'];
-  const soloNonTechnicalEvents = ['Visual Connect', 'Channel Surfing'];
   const selectedTechnicalEvent = getSelectedEvent('technical');
   const selectedNonTechnicalEvent = getSelectedEvent('nontechnical');
+  const technicalTeamEnabled = Boolean(selectedTechnicalEvent) && isTeamEvent(selectedTechnicalEvent);
+  const nonTechnicalTeamEnabled = Boolean(selectedNonTechnicalEvent) && isTeamEvent(selectedNonTechnicalEvent);
 
   if (memberDraft.technicalEvent) {
-    const isSelectedTeamEvent = memberDraft.technicalEvent === selectedTechnicalEvent && isTeamEvent(selectedTechnicalEvent);
-    const isSoloEvent = soloTechnicalEvents.includes(memberDraft.technicalEvent);
-    
-    if (!isSelectedTeamEvent && !isSoloEvent) {
+    if (!technicalTeamEnabled || memberDraft.technicalEvent !== selectedTechnicalEvent) {
       return 'Member technical event is not valid.';
     }
   }
 
   if (memberDraft.nonTechnicalEvent) {
-    const isSelectedTeamEvent = memberDraft.nonTechnicalEvent === selectedNonTechnicalEvent && isTeamEvent(selectedNonTechnicalEvent);
-    const isSoloEvent = soloNonTechnicalEvents.includes(memberDraft.nonTechnicalEvent);
-    
-    if (!isSelectedTeamEvent && !isSoloEvent) {
+    if (!nonTechnicalTeamEnabled || memberDraft.nonTechnicalEvent !== selectedNonTechnicalEvent) {
       return 'Member non-technical event is not valid.';
     }
+  }
+
+  if ((technicalTeamEnabled || nonTechnicalTeamEnabled) && !memberDraft.technicalEvent && !memberDraft.nonTechnicalEvent) {
+    return 'Assign this member to at least one selected team event.';
   }
 
   return '';
@@ -1464,6 +1491,7 @@ function updateIplSlotSelectionState() {
 function updateRegistrationDomFromState() {
   updateMainUserInputs();
   updateRegistrationIdChip();
+  applyTrackSelectionUI();
   updateIplSlotSelectionState();
   renderRegistrationWizard();
 }
@@ -1517,6 +1545,10 @@ function bindRegistrationEvents() {
   });
 
   registrationInputs.nonTechnicalEvents.forEach((input) => {
+    input.addEventListener('change', syncEventSelectionFromForm);
+  });
+
+  registrationInputs.registrationTrack.forEach((input) => {
     input.addEventListener('change', syncEventSelectionFromForm);
   });
 
