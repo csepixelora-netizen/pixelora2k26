@@ -307,6 +307,19 @@ footer{padding:clamp(50px,8vw,90px) clamp(5%,8vw,10%);border-top:1px solid var(-
 .admin-team{display:flex;flex-direction:column;gap:.25rem}
 .admin-team strong{color:var(--txt);font-size:.85rem}
 .admin-team span{opacity:.9;font-size:.78rem;line-height:1.45}
+.admin-food-list{list-style:none;margin:.35rem 0 0;padding:0;display:flex;flex-direction:column;gap:.2rem}
+.admin-food-list li{font-size:.78rem;line-height:1.4}
+.admin-muted{opacity:.7;font-size:.78rem}
+.admin-evtag{display:inline-block;font-size:.68rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--g1);margin-bottom:.25rem}
+.admin-subh{font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;opacity:.75;margin:.4rem 0 .15rem}
+.admin-food-wrap{margin-top:.35rem}
+.admin-scope-hint{font-size:.82rem;opacity:.88;padding:.6rem 1rem;border-radius:12px;border:1px solid rgba(var(--accent-rgb),.35);background:rgba(var(--accent-rgb),.08)}
+.admin-event-stats{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.admin-stat-block{padding:.75rem 1rem;border-radius:14px;border:1px solid var(--border);background:rgba(255,255,255,.03)}
+.admin-stat-block h4{margin:0 0 .5rem;font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;opacity:.8}
+.admin-stat-chips{display:flex;flex-wrap:wrap;gap:.4rem}
+.admin-chip{font-size:.78rem;padding:.35rem .65rem;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid var(--border)}
+.admin-meal-sum{font-size:.78rem;max-width:280px;word-break:break-word}
 .admin-empty{padding:2rem;text-align:center;opacity:.84}
 .admin-view-link{display:inline-flex;align-items:center;justify-content:center;padding:.45rem .75rem;border-radius:999px;border:1px solid rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.2);color:var(--txt);font-size:.74rem;font-weight:700;letter-spacing:.6px;text-transform:uppercase;text-decoration:none;transition:transform .2s var(--ease),filter .2s var(--ease),border-color .2s var(--ease)}
 .admin-view-link:hover{transform:translateY(-1px);filter:brightness(1.08);border-color:rgba(var(--accent-rgb),.72)}

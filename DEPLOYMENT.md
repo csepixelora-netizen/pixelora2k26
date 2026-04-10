@@ -45,7 +45,8 @@ You can use `frontend/config.example.js` as a template.
 6. Verify env vars:
    - ALLOWED_ORIGINS = your GitHub Pages origin
    - FIREBASE_STORAGE_BUCKET = your-project-id.appspot.com
-   - ADMIN_PORTAL_SECRET = strong secret string
+   - ADMIN_PORTAL_SECRET = strong secret string (full admin + delete-all)
+   - Optional: ADMIN_SECRET_TECH, ADMIN_SECRET_NONTECH, ADMIN_SECRET_FOOD for committee-specific admin views (same `admin.html`, different code)
 7. Deploy.
 
 ### Option B: Manual Web Service
@@ -87,9 +88,10 @@ If you use a custom domain, include that domain too, comma-separated.
 ## 6. Admin Portal
 
 - Press `Ctrl+F7` on the frontend.
-- Enter the admin secret.
+- Enter an admin code (`ADMIN_PORTAL_SECRET` for full access, or an optional committee code).
 - If valid, it opens `frontend/admin.html`.
-- The admin page can list registrations, download CSV, delete all data, and view uploaded payment screenshots.
+- Full secret: all columns, CSV, delete all, payment screenshots.
+- Optional secrets (`ADMIN_SECRET_TECH`, `ADMIN_SECRET_NONTECH`, `ADMIN_SECRET_FOOD`): filtered views and CSV; delete-all only works with the main `ADMIN_PORTAL_SECRET`.
 
 ## 7. Local Development Env
 

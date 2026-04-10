@@ -17,3 +17,9 @@ services:
         sync: false
       - key: ADMIN_PORTAL_SECRET
         sync: false
+      - key: ADMIN_SECRET_TECH
+        sync: false
+      - key: ADMIN_SECRET_NONTECH
+        sync: false
+      - key: ADMIN_SECRET_FOOD
+        sync: false

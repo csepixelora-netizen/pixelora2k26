@@ -1,6 +1,6 @@
 window.__PIXELORA_CONFIG__ = {
-  // Render backend URL in production.
-  // Localhost automatically uses same-origin API from app.js/admin.js.
+  // Backend URL (Render, etc.). When set, the frontend always calls this API, including on localhost.
+  // Use "" only if the API is served from the same origin (e.g. local uvicorn with static files).
   apiBaseUrl: "https://your-render-service.onrender.com",
   firebase: {
     apiKey: "REPLACE_WITH_API_KEY",

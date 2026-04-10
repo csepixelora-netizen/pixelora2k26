@@ -28,8 +28,8 @@
 
     <div class="admin-controls">
       <label class="admin-secret-field">
-        <span>Admin Secret</span>
-        <input type="password" id="admin-secret" placeholder="Enter admin secret" autocomplete="off">
+        <span>Admin code</span>
+        <input type="password" id="admin-secret" placeholder="Enter your committee code" autocomplete="off">
       </label>
       <div class="admin-actions">
         <button type="button" class="btn bm admin-btn" id="admin-unlock">Unlock</button>
@@ -39,23 +39,16 @@
       </div>
     </div>
 
+    <p id="admin-scope-hint" class="admin-scope-hint" hidden></p>
     <p id="admin-status" class="admin-status" aria-live="polite"></p>
 
+    <div id="admin-event-stats" class="admin-event-stats" hidden></div>
+
     <div class="admin-table-wrap">
-      <table class="admin-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Year</th>
-            <th>Technical</th>
-            <th>Non-Technical</th>
-            <th>Food</th>
-            <th>Payment</th>
-            <th>Created</th>
-          </tr>
-        </thead>
+      <table class="admin-table" id="admin-main-table">
+        <thead id="admin-table-head"></thead>
         <tbody id="admin-table-body">
-          <tr><td class="admin-empty" colspan="7">Enter admin secret and click Unlock.</td></tr>
+          <tr><td class="admin-empty" colspan="8">Enter admin code and click Unlock.</td></tr>
         </tbody>
       </table>
     </div>
