@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PIXELORA Event View</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
+</head>
+<body class="admin-page">
+<script>
+(function () {
+  var KEY = 'pixelora-coordinator-session';
+  var TTL = 12 * 60 * 60 * 1000;
+  try {
+    var raw = sessionStorage.getItem(KEY);
+    if (!raw) {
+      window.location.replace('index.html');
+      return;
+    }
+    var d = JSON.parse(raw);
+    if (!d || !d.t || !d.eventNorm || Date.now() - d.t > TTL) {
+      sessionStorage.removeItem(KEY);
+      window.location.replace('index.html');
+      return;
+    }
+  } catch (e) {
+    window.location.replace('index.html');
+  }
+})();
+</script>
+<div class="bg-glow"></div>
+<div class="orb orb1"></div>
+<div class="orb orb2"></div>
+
+<main class="admin-page-wrap">
+  <div class="admin-topbar">
+    <a href="index.html" class="btn bo">Back to Site</a>
+    <h1 class="admin-page-title outfit">PIXELORA Event View</h1>
+  </div>
+
+  <section class="admin-shell" aria-labelledby="coord-title">
+    <div class="admin-head">
+      <div>
+        <p class="admin-kicker">Event coordinator</p>
+        <h2 id="coord-title">Teams for <span id="coord-event-title">—</span></h2>
+      </div>
+    </div>
+
+    <div class="coord-toolbar">
+      <div class="coord-exports">
+        <button type="button" class="btn bo admin-export-btn" id="coord-export-xlsx" disabled>Export Excel</button>
+        <button type="button" class="btn bo admin-export-btn" id="coord-export-pdf" disabled>Export PDF</button>
+        <button type="button" class="btn bo admin-btn" id="coord-refresh">Refresh</button>
+      </div>
+    </div>
+    <p id="coord-status" class="coord-status" aria-live="polite"></p>
+    <div id="coord-results" class="coord-results"></div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="shared-registrations.js"></script>
+<script src="coordinator.js"></script>
+</body>
+</html>

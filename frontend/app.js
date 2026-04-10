@@ -66,11 +66,21 @@ const TEAM_RULES = {
   Innopitch: { min: 1, max: 3 },
   'E-Sports (Free fire)': { min: 4, max: 4 },
   'IPL Auction': { min: 4, max: 4 },
-  'Channel Surfing': { min: 3, max: 3 },
-  'Visual Content': { min: 2, max: 2 },
+  'Channel Surfing': { min: 2, max: 2 },
+  'Visual Content': { min: 3, max: 3 },
+  'Visual Connect': { min: 3, max: 3 },
   Devfolio: { min: 1, max: 1 },
   Promptcraft: { min: 1, max: 1 }
 };
+
+const TEAM_RULE_ALIAS = {
+  'Visual Connect': 'Visual Content'
+};
+
+function resolveTeamRuleEventName(eventName) {
+  const raw = String(eventName || '').trim();
+  return TEAM_RULE_ALIAS[raw] || raw;
+}
 
 const IPL_TOTAL_SLOTS = 10;
 let iplRegisteredTeams = 0;
@@ -88,37 +98,6 @@ function buildApiUrl(path) {
 
 function getStoredAdminSecret() {
   return (localStorage.getItem('pixelora-admin-secret') || '').trim();
-}
-
-async function verifyAdminSecret(secret) {
-  const response = await fetch(buildApiUrl('/api/admin/registrations'), {
-    headers: { 'X-Admin-Secret': secret }
-  });
-
-  if (!response.ok) {
-    throw new Error('Invalid admin secret.');
-  }
-}
-
-async function openAdminPageWithSecretCheck() {
-  const defaultSecret = getStoredAdminSecret();
-  const enteredSecret = window.prompt('Enter admin secret to open admin page:', defaultSecret);
-  if (enteredSecret === null) return;
-
-  const secret = enteredSecret.trim();
-  if (!secret) {
-    window.alert('Admin secret is required.');
-    return;
-  }
-
-  try {
-    await verifyAdminSecret(secret);
-    localStorage.setItem('pixelora-admin-secret', secret);
-    sessionStorage.setItem(ADMIN_SHORTCUT_AUTH_KEY, String(Date.now()));
-    window.location.href = 'admin.html';
-  } catch (_error) {
-    window.alert('Invalid admin secret. Access denied.');
-  }
 }
 
 function getAdminSecretValue() {
@@ -334,6 +313,18 @@ async function loadIplSlotStatus() {
   }
 }
 
+function updateFomoStrip() {
+  const el = document.getElementById('fomo-text');
+  if (!el) return;
+  const left = getIplSlotsLeft();
+  const parts = [];
+  if (left > 0 && left <= 4) {
+    parts.push(`IPL Auction: only ${left} team slot${left === 1 ? '' : 's'} left.`);
+  }
+  parts.push('Online registration is limited — secure your spot before the countdown hits zero.');
+  el.textContent = parts.join(' ');
+}
+
 function updateIplSlotUI() {
   const left = getIplSlotsLeft();
 
@@ -355,6 +346,8 @@ function updateIplSlotUI() {
       iplFormOption.style.display = 'flex';
     }
   }
+
+  updateFomoStrip();
 }
 
 function watchIplSlots() {
@@ -421,14 +414,327 @@ if (adminReset) {
   adminReset.addEventListener('click', resetAllRegistrations);
 }
 
-addEventListener('keydown', (event) => {
-  const isCtrlF7 = event.ctrlKey && event.key === 'F7';
-  const isMetaF7 = event.metaKey && event.key === 'F7';
+const ADMIN_SURFACE_GATE_KEY = 'pixelora-admin-surface-gate';
+const ADMIN_PORTAL_MODE_KEY = 'pixelora-admin-mode';
+const COORDINATOR_SESSION_KEY = 'pixelora-coordinator-session';
+const ADMIN_SURFACE_PASSWORD = 'CSE';
+const ADMIN_HOTZONE_TAPS = 3;
+const ADMIN_HOTZONE_WINDOW_MS = 2000;
 
-  if (isCtrlF7 || isMetaF7) {
-    event.preventDefault();
-    openAdminPageWithSecretCheck();
+const adminAccessHotzone = document.getElementById('admin-access-hotzone');
+const adminGateDialog = document.getElementById('admin-gate-dialog');
+const adminGatePass = document.getElementById('admin-gate-pass');
+const adminGateErr = document.getElementById('admin-gate-err');
+const adminGateSubmit = document.getElementById('admin-gate-submit');
+const adminGateCancel = document.getElementById('admin-gate-cancel');
+const adminGateBackdrop = document.getElementById('admin-gate-backdrop');
+const adminGateStepPassword = document.getElementById('admin-gate-step-password');
+const adminGateStepRole = document.getElementById('admin-gate-step-role');
+const adminGateStepCoord = document.getElementById('admin-gate-step-coord');
+const adminGateStepFullSecret = document.getElementById('admin-gate-step-fullsecret');
+const adminGateRoleFull = document.getElementById('admin-gate-role-full');
+const adminGateRoleCoord = document.getElementById('admin-gate-role-coord');
+const adminGateBackRole = document.getElementById('admin-gate-back-role');
+const adminGateCoordEvent = document.getElementById('admin-gate-coord-event');
+const adminGateCoordContinue = document.getElementById('admin-gate-coord-continue');
+const adminGateBackCoord = document.getElementById('admin-gate-back-coord');
+const adminGateCoordErr = document.getElementById('admin-gate-coord-err');
+const adminGateAdminSecret = document.getElementById('admin-gate-admin-secret');
+const adminGateFullContinue = document.getElementById('admin-gate-full-continue');
+const adminGateBackFull = document.getElementById('admin-gate-back-full');
+const adminGateCancelFull = document.getElementById('admin-gate-cancel-full');
+const adminGateAdminErr = document.getElementById('admin-gate-admin-err');
+
+const adminHotzoneTapTimes = [];
+let adminGateBackdropDismissOk = false;
+let adminGateBackdropPointerTimer = 0;
+
+function scheduleAdminGateFocus(el, ms) {
+  window.setTimeout(() => el?.focus(), ms);
+}
+
+function hideAllAdminGateErrors() {
+  [adminGateErr, adminGateCoordErr, adminGateAdminErr].forEach((el) => {
+    if (!el) return;
+    el.textContent = '';
+    el.classList.add('is-hidden');
+  });
+}
+
+function showAdminGateStep(step) {
+  const steps = {
+    password: adminGateStepPassword,
+    role: adminGateStepRole,
+    coord: adminGateStepCoord,
+    fullsecret: adminGateStepFullSecret
+  };
+  Object.values(steps).forEach((el) => el?.classList.add('is-hidden'));
+  steps[step]?.classList.remove('is-hidden');
+}
+
+function registerAdminHotzoneTap() {
+  const now = Date.now();
+  adminHotzoneTapTimes.push(now);
+  while (adminHotzoneTapTimes.length && now - adminHotzoneTapTimes[0] > ADMIN_HOTZONE_WINDOW_MS) {
+    adminHotzoneTapTimes.shift();
   }
+  if (adminHotzoneTapTimes.length >= ADMIN_HOTZONE_TAPS) {
+    adminHotzoneTapTimes.length = 0;
+    openAdminSurfaceGateDialog();
+    return true;
+  }
+  return false;
+}
+
+function openAdminSurfaceGateDialog() {
+  if (!adminGateDialog) return;
+  adminGateBackdropDismissOk = false;
+  if (adminGateBackdropPointerTimer) {
+    clearTimeout(adminGateBackdropPointerTimer);
+    adminGateBackdropPointerTimer = 0;
+  }
+  adminGateDialog.classList.remove('is-hidden');
+  hideAllAdminGateErrors();
+  if (adminGatePass) adminGatePass.value = '';
+  if (adminGateCoordEvent) adminGateCoordEvent.value = '';
+  if (adminGateAdminSecret) adminGateAdminSecret.value = '';
+  showAdminGateStep('password');
+  if (adminGateBackdrop) {
+    adminGateBackdrop.style.pointerEvents = 'none';
+  }
+  adminGateBackdropPointerTimer = window.setTimeout(() => {
+    adminGateBackdropPointerTimer = 0;
+    if (adminGateBackdrop) {
+      adminGateBackdrop.style.pointerEvents = '';
+    }
+    adminGateBackdropDismissOk = true;
+    adminGatePass?.focus();
+  }, 450);
+}
+
+function closeAdminSurfaceGateDialog() {
+  adminGateBackdropDismissOk = false;
+  if (adminGateBackdropPointerTimer) {
+    clearTimeout(adminGateBackdropPointerTimer);
+    adminGateBackdropPointerTimer = 0;
+  }
+  if (adminGateBackdrop) {
+    adminGateBackdrop.style.pointerEvents = '';
+  }
+  adminGateDialog?.classList.add('is-hidden');
+  showAdminGateStep('password');
+}
+
+function goToRoleStepAfterPassword() {
+  hideAllAdminGateErrors();
+  showAdminGateStep('role');
+  scheduleAdminGateFocus(adminGateRoleFull, 60);
+}
+
+async function submitCoordinatorGatePath() {
+  const SR = window.PixeloraSharedReg;
+  if (!SR || typeof SR.extractEventCatalog !== 'function') {
+    if (adminGateCoordErr) {
+      adminGateCoordErr.textContent = 'Unable to load registration helpers.';
+      adminGateCoordErr.classList.remove('is-hidden');
+    }
+    return;
+  }
+  const rawVal = String(adminGateCoordEvent?.value || '').trim();
+  const key = SR.normalizeEventCatalogKey(rawVal);
+  if (!key) {
+    if (adminGateCoordErr) {
+      adminGateCoordErr.textContent = 'Enter an event name.';
+      adminGateCoordErr.classList.remove('is-hidden');
+    }
+    return;
+  }
+  if (adminGateCoordContinue) adminGateCoordContinue.disabled = true;
+  try {
+    const response = await fetch(buildApiUrl('/api/surface/registrations'), {
+      headers: { 'X-Surface-Auth': ADMIN_SURFACE_PASSWORD }
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof result.detail === 'string' ? result.detail : 'Unable to load events.';
+      throw new Error(detail);
+    }
+    const registrations = Array.isArray(result.registrations) ? result.registrations : [];
+    const catalog = SR.extractEventCatalog(registrations);
+    if (!catalog.has(key)) {
+      if (adminGateCoordErr) {
+        adminGateCoordErr.textContent = 'No match for that event in current registrations.';
+        adminGateCoordErr.classList.remove('is-hidden');
+      }
+      return;
+    }
+    const label = catalog.get(key) || rawVal;
+    sessionStorage.setItem(
+      COORDINATOR_SESSION_KEY,
+      JSON.stringify({ t: Date.now(), eventNorm: key, eventLabel: label })
+    );
+    closeAdminSurfaceGateDialog();
+    window.location.href = 'coordinator.html';
+  } catch (err) {
+    if (adminGateCoordErr) {
+      adminGateCoordErr.textContent = err.message || 'Request failed.';
+      adminGateCoordErr.classList.remove('is-hidden');
+    }
+  } finally {
+    if (adminGateCoordContinue) adminGateCoordContinue.disabled = false;
+  }
+}
+
+async function submitFullAdminGatePath() {
+  const secret = String(adminGateAdminSecret?.value || '').trim();
+  if (!secret) {
+    if (adminGateAdminErr) {
+      adminGateAdminErr.textContent = 'Admin secret is required.';
+      adminGateAdminErr.classList.remove('is-hidden');
+    }
+    return;
+  }
+  if (adminGateFullContinue) adminGateFullContinue.disabled = true;
+  hideAllAdminGateErrors();
+  try {
+    const response = await fetch(buildApiUrl('/api/admin/registrations'), {
+      headers: { 'X-Admin-Secret': secret }
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = typeof result.detail === 'string' ? result.detail : 'Invalid admin secret.';
+      throw new Error(detail);
+    }
+    sessionStorage.setItem(ADMIN_SURFACE_GATE_KEY, JSON.stringify({ t: Date.now() }));
+    sessionStorage.setItem(ADMIN_PORTAL_MODE_KEY, 'full');
+    closeAdminSurfaceGateDialog();
+    window.location.href = 'admin.html';
+  } catch (err) {
+    if (adminGateAdminErr) {
+      adminGateAdminErr.textContent = err.message || 'Access denied.';
+      adminGateAdminErr.classList.remove('is-hidden');
+    }
+  } finally {
+    if (adminGateFullContinue) adminGateFullContinue.disabled = false;
+  }
+}
+
+if (adminAccessHotzone) {
+  adminAccessHotzone.addEventListener(
+    'pointerdown',
+    (e) => {
+      const opened = registerAdminHotzoneTap();
+      if (opened) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    { passive: false }
+  );
+}
+
+if (adminGateSubmit) {
+  adminGateSubmit.addEventListener('click', () => {
+    const v = String(adminGatePass?.value || '').trim();
+    if (v === ADMIN_SURFACE_PASSWORD) {
+      goToRoleStepAfterPassword();
+      return;
+    }
+    if (adminGateErr) {
+      adminGateErr.textContent = 'Incorrect password.';
+      adminGateErr.classList.remove('is-hidden');
+    }
+  });
+}
+
+if (adminGateCancel) {
+  adminGateCancel.addEventListener('click', closeAdminSurfaceGateDialog);
+}
+if (adminGateCancelFull) {
+  adminGateCancelFull.addEventListener('click', closeAdminSurfaceGateDialog);
+}
+if (adminGateBackdrop) {
+  adminGateBackdrop.addEventListener('click', (e) => {
+    if (!adminGateBackdropDismissOk) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    closeAdminSurfaceGateDialog();
+  });
+}
+if (adminGatePass) {
+  adminGatePass.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      adminGateSubmit?.click();
+    }
+    if (e.key === 'Escape') closeAdminSurfaceGateDialog();
+  });
+}
+
+adminGateRoleFull?.addEventListener('click', () => {
+  hideAllAdminGateErrors();
+  showAdminGateStep('fullsecret');
+  scheduleAdminGateFocus(adminGateAdminSecret, 60);
+});
+
+adminGateRoleCoord?.addEventListener('click', () => {
+  hideAllAdminGateErrors();
+  showAdminGateStep('coord');
+  scheduleAdminGateFocus(adminGateCoordEvent, 60);
+});
+
+adminGateBackRole?.addEventListener('click', () => {
+  hideAllAdminGateErrors();
+  showAdminGateStep('password');
+  scheduleAdminGateFocus(adminGatePass, 60);
+});
+
+adminGateBackCoord?.addEventListener('click', () => {
+  hideAllAdminGateErrors();
+  showAdminGateStep('role');
+  scheduleAdminGateFocus(adminGateRoleFull, 60);
+});
+
+adminGateBackFull?.addEventListener('click', () => {
+  hideAllAdminGateErrors();
+  showAdminGateStep('role');
+  scheduleAdminGateFocus(adminGateRoleFull, 60);
+});
+
+adminGateCoordContinue?.addEventListener('click', () => {
+  void submitCoordinatorGatePath();
+});
+
+adminGateCoordEvent?.addEventListener('input', () => {
+  adminGateCoordEvent.value = String(adminGateCoordEvent.value || '').toUpperCase();
+});
+
+adminGateCoordEvent?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    void submitCoordinatorGatePath();
+  }
+  if (e.key === 'Escape') closeAdminSurfaceGateDialog();
+});
+
+adminGateFullContinue?.addEventListener('click', () => {
+  void submitFullAdminGatePath();
+});
+
+adminGateAdminSecret?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    void submitFullAdminGatePath();
+  }
+  if (e.key === 'Escape') closeAdminSurfaceGateDialog();
+});
+
+[adminGateStepRole, adminGateStepCoord, adminGateStepFullSecret].forEach((el) => {
+  el?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeAdminSurfaceGateDialog();
+  });
 });
 
 const REG_SESSION_STORAGE_KEY = 'pixelora-registration-session';
@@ -447,7 +753,8 @@ const CATEGORY_EVENTS = {
     { value: 'Channel Surfing', label: 'Channel Surfing' }
   ]
 };
-const UPI_ID = 'sachinvelu6925@okaxis';
+/** UPI-registered number shown on the payment step and embedded in the pay-to QR. */
+const UPI_NUMBER = '26666671';
 const PAYMENT_PER_HEAD = 150;
 
 const registrationDom = {
@@ -531,7 +838,8 @@ function setRegStatus(message, type) {
 }
 
 function getTeamRule(eventName) {
-  return TEAM_RULES[eventName] || { min: 1, max: 1 };
+  const key = resolveTeamRuleEventName(eventName);
+  return TEAM_RULES[key] || { min: 1, max: 1 };
 }
 
 function createEmptyRegistrationState() {
@@ -666,10 +974,90 @@ function getSelectedEvent(category) {
 }
 
 function getTeamEventMembers(category, eventName) {
+  const want = String(eventName || '').trim();
   return registrationState.teamMembers.filter((member) => {
-    if (category === 'technical') return member.technicalEvent === eventName;
-    return member.nonTechnicalEvent === eventName;
+    if (category === 'technical') return String(member.technicalEvent || '').trim() === want;
+    return String(member.nonTechnicalEvent || '').trim() === want;
   });
+}
+
+function countTeammatesForEventOnPool(memberList, category, eventName) {
+  const want = String(eventName || '').trim();
+  return memberList.filter((member) => {
+    if (category === 'technical') return String(member.technicalEvent || '').trim() === want;
+    return String(member.nonTechnicalEvent || '').trim() === want;
+  }).length;
+}
+
+function validateMemberTeamCapacity(memberDraft) {
+  const excludeId = memberDraft.memberId;
+  const simulated = registrationState.teamMembers
+    .filter((m) => m.memberId !== excludeId)
+    .concat([
+      {
+        ...memberDraft,
+        technical_used: Boolean(memberDraft.technicalEvent),
+        nontechnical_used: Boolean(memberDraft.nonTechnicalEvent)
+      }
+    ]);
+
+  const check = (category, selectedEvent) => {
+    const ev = String(selectedEvent || '').trim();
+    if (!ev || !isTeamEvent(ev)) return '';
+    const rule = getTeamRule(ev);
+    const cap = Math.max(0, rule.max - 1);
+    const n = countTeammatesForEventOnPool(simulated, category, ev);
+    if (n > cap) {
+      return `${ev} allows at most ${cap} teammate(s) besides the leader (${rule.max} total including you).`;
+    }
+    return '';
+  };
+
+  return (
+    check('technical', getSelectedEvent('technical')) || check('nontechnical', getSelectedEvent('nontechnical')) || ''
+  );
+}
+
+function validateTeamMaxSizes() {
+  const pool = registrationState.teamMembers;
+  const check = (category, selectedEvent) => {
+    const ev = String(selectedEvent || '').trim();
+    if (!ev || !isTeamEvent(ev)) return '';
+    const rule = getTeamRule(ev);
+    const cap = Math.max(0, rule.max - 1);
+    const n = countTeammatesForEventOnPool(pool, category, ev);
+    if (n > cap) {
+      return `${ev} has too many teammates (${n}). Maximum is ${cap} besides the leader (${rule.max} including you). Remove or reassign members.`;
+    }
+    return '';
+  };
+  return check('technical', getSelectedEvent('technical')) || check('nontechnical', getSelectedEvent('nontechnical')) || '';
+}
+
+function canAddAnotherPoolMember() {
+  const tech = getSelectedEvent('technical');
+  const nt = getSelectedEvent('nontechnical');
+  const techEnabled = Boolean(tech) && isTeamEvent(tech);
+  const ntEnabled = Boolean(nt) && isTeamEvent(nt);
+  if (!techEnabled && !ntEnabled) return false;
+
+  const techHasRoom =
+    !techEnabled || getTeamEventMembers('technical', tech).length < getTeamRule(tech).max - 1;
+  const ntHasRoom = !ntEnabled || getTeamEventMembers('nontechnical', nt).length < getTeamRule(nt).max - 1;
+
+  if (techEnabled && ntEnabled) return techHasRoom || ntHasRoom;
+  if (techEnabled) return techHasRoom;
+  if (ntEnabled) return ntHasRoom;
+  return false;
+}
+
+function syncMemberAddButtonState() {
+  if (!registrationDom.memberAddBtn) return;
+  const canAdd = canAddAnotherPoolMember();
+  registrationDom.memberAddBtn.disabled = !canAdd;
+  registrationDom.memberAddBtn.title = canAdd
+    ? ''
+    : 'Roster is full for your selected event(s). Remove a member or change events to add more.';
 }
 
 function getTeamRequirement(category) {
@@ -689,19 +1077,6 @@ function getTeamRequirement(category) {
   };
 }
 
-function isMemberEventSlotBlocked(category, eventName, memberId) {
-  const selectedMainEvent = getSelectedEvent(category);
-  if (!selectedMainEvent || selectedMainEvent !== eventName) return false;
-  if (!isTeamEvent(eventName)) return false;
-
-  const rule = getTeamRule(eventName);
-  const currentCount = getTeamEventMembers(category, eventName).length;
-  const member = registrationState.teamMembers.find((item) => item.memberId === memberId);
-  const currentlyAssignedHere = category === 'technical' ? member?.technicalEvent === eventName : member?.nonTechnicalEvent === eventName;
-  if (currentlyAssignedHere) return false;
-  return currentCount >= Math.max(0, rule.max - 1);
-}
-
 function renderEventSummary() {
   if (!registrationDom.eventSummary || !registrationDom.teamNote) return;
 
@@ -711,17 +1086,26 @@ function renderEventSummary() {
   const nonTechnicalRequirement = getTeamRequirement('nontechnical');
   const needsMemberStep = shouldShowMemberStep();
 
+  const techCap =
+    technicalRequirement.totalMax > 1
+      ? ` Max ${technicalRequirement.totalMax} including you (add up to ${technicalRequirement.totalMax - 1} teammate${technicalRequirement.totalMax - 1 === 1 ? '' : 's'}).`
+      : ' Solo — main participant only.';
+  const ntCap =
+    nonTechnicalRequirement.totalMax > 1
+      ? ` Max ${nonTechnicalRequirement.totalMax} including you (add up to ${nonTechnicalRequirement.totalMax - 1} teammate${nonTechnicalRequirement.totalMax - 1 === 1 ? '' : 's'}).`
+      : ' Solo — main participant only.';
+
   registrationDom.eventSummary.innerHTML = `
     <div class="review-grid">
       <div class="review-card">
         <h5>Technical</h5>
         <p>${escapeHtml(technicalEvent || 'Not selected')}</p>
-        <p>${technicalRequirement.totalMin > 1 ? `Team required: ${technicalRequirement.requiredMembers} member${technicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'As per rules.'}</p>
+        <p>${technicalRequirement.totalMin > 1 ? `At least ${technicalRequirement.requiredMembers} teammate${technicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'No extra teammates required.'}${techCap}</p>
       </div>
       <div class="review-card">
         <h5>Non-Technical</h5>
         <p>${escapeHtml(nonTechnicalEvent || 'Not selected')}</p>
-        <p>${nonTechnicalRequirement.totalMin > 1 ? `Team required: ${nonTechnicalRequirement.requiredMembers} member${nonTechnicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'As per rules.'}</p>
+        <p>${nonTechnicalRequirement.totalMin > 1 ? `At least ${nonTechnicalRequirement.requiredMembers} teammate${nonTechnicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.` : 'No extra teammates required.'}${ntCap}</p>
       </div>
     </div>
   `;
@@ -949,7 +1333,7 @@ function formatCurrencyInr(value) {
 function updatePaymentQrPreview() {
   const participantCount = getUniqueParticipantCount();
   const totalAmount = participantCount * PAYMENT_PER_HEAD;
-  const upiPayload = `upi://pay?pa=${encodeURIComponent(UPI_ID)}&pn=${encodeURIComponent('PIXELORA 2K26')}&am=${encodeURIComponent(totalAmount.toFixed(2))}&cu=INR&tn=${encodeURIComponent(`Registration for ${participantCount} participant(s)`)}`;
+  const upiPayload = `upi://pay?pa=${encodeURIComponent(UPI_NUMBER)}&pn=${encodeURIComponent('PIXELORA 2K26')}&am=${encodeURIComponent(totalAmount.toFixed(2))}&cu=INR&tn=${encodeURIComponent(`Registration for ${participantCount} participant(s)`)}`;
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(upiPayload)}`;
 
   if (registrationDom.paymentTotal) {
@@ -961,7 +1345,7 @@ function updatePaymentQrPreview() {
   }
 
   if (registrationDom.upiIdText) {
-    registrationDom.upiIdText.textContent = UPI_ID;
+    registrationDom.upiIdText.textContent = UPI_NUMBER;
   }
 }
 
@@ -1233,6 +1617,14 @@ function validateTeamRequirements() {
 
 function openMemberEditor(memberId = '') {
   const existingMember = registrationState.teamMembers.find((member) => member.memberId === memberId);
+  if (!existingMember && !canAddAnotherPoolMember()) {
+    setRegStatus(
+      'Maximum roster size reached for your selected event(s). Remove a member or pick different events.',
+      'err'
+    );
+    return;
+  }
+
   registrationState.draftMember = existingMember ? cloneJson(existingMember) : blankMemberDraft(createNextMemberId());
 
   const selectedTechnicalEvent = getSelectedEvent('technical');
@@ -1283,6 +1675,12 @@ function saveMemberDraft() {
   const conflictError = validateMemberConflicts(memberDraft);
   if (conflictError) {
     setRegStatus(conflictError, 'err');
+    return;
+  }
+
+  const capacityError = validateMemberTeamCapacity(memberDraft);
+  if (capacityError) {
+    setRegStatus(capacityError, 'err');
     return;
   }
 
@@ -1625,6 +2023,13 @@ function bindRegistrationEvents() {
     const teamRequirementError = validateTeamRequirements();
     if (teamRequirementError) {
       setRegStatus(teamRequirementError, 'err');
+      goToStep(3);
+      return;
+    }
+
+    const teamMaxError = validateTeamMaxSizes();
+    if (teamMaxError) {
+      setRegStatus(teamMaxError, 'err');
       goToStep(3);
       return;
     }

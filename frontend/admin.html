@@ -6,8 +6,40 @@
 <title>PIXELORA Admin Portal</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;700;800;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" crossorigin="anonymous"></script>
 </head>
 <body class="admin-page">
+<script>
+(function () {
+  var GATE = 'pixelora-admin-surface-gate';
+  var MODE = 'pixelora-admin-mode';
+  var TTL = 12 * 60 * 60 * 1000;
+  try {
+    var raw = sessionStorage.getItem(GATE);
+    if (!raw) {
+      window.location.replace('index.html');
+      return;
+    }
+    var d = JSON.parse(raw);
+    if (!d || !d.t || Date.now() - d.t > TTL) {
+      sessionStorage.removeItem(GATE);
+      sessionStorage.removeItem(MODE);
+      window.location.replace('index.html');
+      return;
+    }
+    if (sessionStorage.getItem(MODE) !== 'full') {
+      sessionStorage.removeItem(GATE);
+      sessionStorage.removeItem(MODE);
+      window.location.replace('index.html');
+      return;
+    }
+  } catch (e) {
+    window.location.replace('index.html');
+  }
+})();
+</script>
 <div class="bg-glow"></div>
 <div class="orb orb1"></div>
 <div class="orb orb2"></div>
@@ -34,35 +66,73 @@
       <div class="admin-actions">
         <button type="button" class="btn bm admin-btn" id="admin-unlock">Unlock</button>
         <button type="button" class="btn bo admin-btn" id="admin-refresh">Refresh</button>
-        <button type="button" class="btn bm admin-btn" id="admin-download">Download CSV</button>
-        <button type="button" class="btn bo admin-btn" id="admin-reset">Delete All Data</button>
+        <button type="button" class="btn bo admin-btn" id="admin-export-toggle" disabled aria-expanded="false" aria-controls="admin-export-bar">Export data</button>
+        <button type="button" class="btn bo admin-btn" id="admin-reset" disabled>Delete All Data</button>
       </div>
     </div>
 
     <p id="admin-status" class="admin-status" aria-live="polite"></p>
 
-    <div class="admin-table-wrap">
-      <table class="admin-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Year</th>
-            <th>Technical</th>
-            <th>Non-Technical</th>
-            <th>Food</th>
-            <th>Payment</th>
-            <th>Created</th>
-          </tr>
-        </thead>
-        <tbody id="admin-table-body">
-          <tr><td class="admin-empty" colspan="7">Enter admin secret and click Unlock.</td></tr>
-        </tbody>
-      </table>
+    <div id="admin-export-bar" class="admin-export-bar is-hidden" aria-label="Data exports">
+      <div class="admin-export-rows">
+        <div class="admin-export-row">
+          <div class="admin-export-meta">
+            <span class="admin-export-label">Technical teams</span>
+            <span class="admin-export-count" id="export-count-tech">0 teams</span>
+            <span class="admin-export-hint" id="export-hint-tech" aria-live="polite"></span>
+          </div>
+          <div class="admin-export-btns" role="group" aria-label="Technical export formats">
+            <button type="button" class="btn bo admin-export-btn" id="export-tech-csv">CSV</button>
+            <button type="button" class="btn bo admin-export-btn" id="export-tech-xlsx">Excel</button>
+            <button type="button" class="btn bo admin-export-btn" id="export-tech-pdf">PDF</button>
+          </div>
+        </div>
+        <div class="admin-export-row">
+          <div class="admin-export-meta">
+            <span class="admin-export-label">Non-technical teams</span>
+            <span class="admin-export-count" id="export-count-nt">0 teams</span>
+            <span class="admin-export-hint" id="export-hint-nt" aria-live="polite"></span>
+          </div>
+          <div class="admin-export-btns" role="group" aria-label="Non-technical export formats">
+            <button type="button" class="btn bo admin-export-btn" id="export-nt-csv">CSV</button>
+            <button type="button" class="btn bo admin-export-btn" id="export-nt-xlsx">Excel</button>
+            <button type="button" class="btn bo admin-export-btn" id="export-nt-pdf">PDF</button>
+          </div>
+        </div>
+        <div class="admin-export-row">
+          <div class="admin-export-meta">
+            <span class="admin-export-label">Food (all people)</span>
+            <span class="admin-export-count" id="export-count-food">0 people</span>
+            <span class="admin-export-hint" id="export-hint-food" aria-live="polite"></span>
+          </div>
+          <div class="admin-export-btns" role="group" aria-label="Food export formats">
+            <button type="button" class="btn bo admin-export-btn" id="export-food-csv">CSV</button>
+            <button type="button" class="btn bo admin-export-btn" id="export-food-xlsx">Excel</button>
+            <button type="button" class="btn bo admin-export-btn" id="export-food-pdf">PDF</button>
+          </div>
+        </div>
+        <div class="admin-export-row admin-export-row--dev">
+          <div class="admin-export-meta">
+            <span class="admin-export-label">Developers</span>
+            <span class="admin-export-count">Full payload</span>
+          </div>
+          <div class="admin-export-btns">
+            <button type="button" class="btn bm admin-export-btn" id="export-json">JSON</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="admin-view-root" class="admin-view-root">
+      <p class="admin-empty">Enter admin secret and click Unlock.</p>
     </div>
   </section>
 </main>
 
+<div id="admin-backdrop" class="admin-backdrop" aria-hidden="true"></div>
+
 <script src="config.js"></script>
+<script src="shared-registrations.js"></script>
 <script src="admin.js"></script>
 </body>
 </html>

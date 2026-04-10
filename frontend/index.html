@@ -48,6 +48,11 @@
   <a href="#register" class="btn bm rv">Register Now</a>
 </section>
 
+<div class="fomo-strip rv" id="fomo-strip" role="status" aria-live="polite">
+  <span class="fomo-pulse" aria-hidden="true"></span>
+  <p class="fomo-text" id="fomo-text">Online registration is limited — secure your spot before the countdown hits zero.</p>
+</div>
+
 <!-- COUNTDOWN -->
 <div class="cds">
   <p class="cdl rv">Online Registration Closes In</p>
@@ -128,7 +133,7 @@
       <span class="ev-tag">Pitch the impossible. Convince the inevitable.</span>
       <p>Share your new idea to solve a real problem in simple and clear steps.</p>
       <ul class="ev-rules">
-        <li>Solo, duo, or 3 members</li>
+        <li>Team of 1–3 including the leader (solo, duo, or full trio)</li>
         <li>3-min pitch + 2-min Q&A</li>
         <li>Original ideas only</li>
         <li>Venue: Main Block Auditorium</li>
@@ -196,7 +201,7 @@
       <span class="ev-tag">Switch fast. Guess smart. Win quick.</span>
       <p>A fun clue-based event where participants identify TV channels, shows, logos, or scenes in rapid rounds.</p>
       <ul class="ev-rules">
-        <li>Team of exactly 3 members</li>
+        <li>Team of exactly 2 people (1 leader + 1 teammate)</li>
         <li>Rapid-fire visual rounds</li>
         <li>Quick clue identification</li>
         <li>Best 3 teams awarded</li>
@@ -210,7 +215,7 @@
       <span class="ev-tag">Bid smart, build strong.</span>
       <p class="slot-pill" id="ipl-slot-card">Slots Left: 10</p>
       <ul class="ev-rules">
-        <li>Team (3–4) | Budget: 100C</li>
+        <li>Team of exactly 4 (1 leader + 3 teammates) | Budget: 100C</li>
         <li>Squad: 15 (11 Play + 4 Sub)</li>
         <li>Overseas slots: 6 | Max 4 in 11</li>
         <li>Bid smart, build your team</li>
@@ -220,11 +225,11 @@
     <div class="ev-card rv d1">
       <div class="ev-badge"><i class="ph ph-eye"></i></div>
       <i class="ev-wm ph ph-eye"></i>
-      <h3>Visual Content</h3>
+      <h3>Visual Connect</h3>
       <span class="ev-tag">Find the link. Crack the connection.</span>
       <p>Find the common connection between given images or clues.</p>
       <ul class="ev-rules">
-        <li>Team of exactly 2 members</li>
+        <li>Team of exactly 3 people (1 leader + 2 teammates)</li>
         <li>Identify the correct connection</li>
         <li>Time limit for each question</li>
         <li>No mobile phones allowed</li>
@@ -244,7 +249,7 @@
     <div class="tl2-row"><div class="tl2-card"><div class="tl2-time">10:45 AM – 11:00 AM</div><h3><i class="ph ph-coffee" style="color:var(--g1);margin-right:8px"></i>Break</h3><p>Network and refresh</p></div></div>
     <div class="tl2-row"><div class="tl2-card"><div class="tl2-time">11:00 AM – 12:30 PM</div><h3><i class="ph ph-code" style="color:var(--g1);margin-right:8px"></i>Technical Events</h3><p>Innopitch, DevFolio, PromptCraft</p></div></div>
     <div class="tl2-row"><div class="tl2-card"><div class="tl2-time">12:30 PM – 01:30 PM</div><h3><i class="ph ph-bowl-food" style="color:var(--g1);margin-right:8px"></i>Lunch Break</h3><p>Recharge and connect (Veg & Non-Veg)</p></div></div>
-    <div class="tl2-row"><div class="tl2-card"><div class="tl2-time">01:30 PM – 03:00 PM</div><h3><i class="ph ph-game-controller" style="color:var(--g1);margin-right:8px"></i>Non-Technical Events</h3><p>E-Sports, Channel Surfing, IPL Auction, Visual Content</p></div></div>
+    <div class="tl2-row"><div class="tl2-card"><div class="tl2-time">01:30 PM – 03:00 PM</div><h3><i class="ph ph-game-controller" style="color:var(--g1);margin-right:8px"></i>Non-Technical Events</h3><p>E-Sports, Channel Surfing, IPL Auction, Visual Connect</p></div></div>
     <div class="tl2-row"><div class="tl2-card"><div class="tl2-time">03:00 PM – 03:40 PM</div><h3><i class="ph ph-trophy" style="color:var(--g1);margin-right:8px"></i>Valedictory</h3><p>Certificates and Prizes Distribution</p></div></div>
   </div>
 </section>
@@ -353,7 +358,7 @@
               <div class="reg-checklist">
                 <label class="reg-option"><input type="radio" name="nonTechnicalEvents" value="E-Sports (Free fire)"><span>E-Sports (Free fire)</span></label>
                 <label class="reg-option" id="ipl-form-option"><input type="radio" name="nonTechnicalEvents" value="IPL Auction"><span>IPL Auction</span><em class="slot-inline" id="ipl-slot-form">(10 slots left)</em></label>
-                <label class="reg-option"><input type="radio" name="nonTechnicalEvents" value="Visual Content"><span>Visual Content</span></label>
+                <label class="reg-option"><input type="radio" name="nonTechnicalEvents" value="Visual Content"><span>Visual Connect</span></label>
                 <label class="reg-option"><input type="radio" name="nonTechnicalEvents" value="Channel Surfing"><span>Channel Surfing</span></label>
               </div>
             </div>
@@ -434,7 +439,11 @@
             <span style="display:block; margin-bottom:0.5rem; font-weight:700">Payment Details</span>
             <p style="margin:0.3rem 0; opacity:0.92">Payment per head - Rs.150</p>
             <p id="payment-total" style="margin:0.3rem 0; opacity:0.92; font-weight:700">Total amount - Rs.150</p>
-            <p style="margin:0.3rem 0 0.8rem; opacity:0.92">UPI ID - <span id="upi-id-text">sachinvelu6925@okaxis</span></p>
+            <div class="reg-upi-block">
+              <span class="reg-upi-label">UPI number</span>
+              <p id="upi-id-text" class="reg-upi-number" aria-label="UPI number for payment">26666671</p>
+              <p class="reg-upi-hint">Scan the QR or pay manually to this UPI number in your app.</p>
+            </div>
             <img id="payment-qr" src="Payment_QR.jpeg" alt="Payment QR" style="width:220px; max-width:100%; height:auto; border-radius:10px; border:1px solid var(--border); display:block">
           </div>
           <label class="reg-field">
@@ -532,9 +541,59 @@
   </div>
   <div class="ft-bottom">
     <p>&copy; 2026 PIXELORA. All Rights Reserved.</p>
-    <p class="credit">Designed &amp; Developed by <span>SACHIN V & PRANAVKUMARAN BALAMURUGAN</span></p>
+    <p class="credit">Designed by Humans &amp; Developed by <span>AI</span></p>
   </div>
 </footer>
+
+<div id="admin-access-hotzone" class="admin-access-hotzone" aria-hidden="true"></div>
+<div id="admin-gate-dialog" class="admin-gate-dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="admin-gate-flow-title">
+  <div class="admin-gate-dialog__backdrop" id="admin-gate-backdrop"></div>
+  <div class="admin-gate-dialog__panel">
+    <div id="admin-gate-step-password" class="admin-gate-step">
+      <p id="admin-gate-flow-title" class="admin-gate-dialog__title">Restricted access</p>
+      <p class="admin-gate-dialog__hint">First-level password (site gate).</p>
+      <input type="password" id="admin-gate-pass" class="admin-gate-dialog__input" autocomplete="off" placeholder="Password" />
+      <div class="admin-gate-dialog__actions">
+        <button type="button" class="btn bm" id="admin-gate-submit">Continue</button>
+        <button type="button" class="btn bo" id="admin-gate-cancel">Cancel</button>
+      </div>
+      <p id="admin-gate-err" class="admin-gate-dialog__err is-hidden" role="alert"></p>
+    </div>
+    <div id="admin-gate-step-role" class="admin-gate-step is-hidden">
+      <p class="admin-gate-dialog__title" id="admin-gate-role-title">Select access</p>
+      <p class="admin-gate-dialog__hint">Choose how you want to continue.</p>
+      <div class="admin-gate-dialog__roles">
+        <button type="button" class="btn bm" id="admin-gate-role-full">Full Admin</button>
+        <button type="button" class="btn bm" id="admin-gate-role-coord">Event Coordinator</button>
+      </div>
+      <div class="admin-gate-dialog__actions">
+        <button type="button" class="btn bo" id="admin-gate-back-role">Back</button>
+      </div>
+    </div>
+    <div id="admin-gate-step-coord" class="admin-gate-step is-hidden">
+      <p class="admin-gate-dialog__title">Event coordinator</p>
+      <p class="admin-gate-dialog__hint">Enter the event name as registered. It will be matched against live data.</p>
+      <label class="admin-gate-dialog__field-label" for="admin-gate-coord-event">Enter Event Name</label>
+      <input type="text" id="admin-gate-coord-event" class="admin-gate-dialog__input" autocomplete="off" spellcheck="false" autocapitalize="characters" placeholder="EVENT NAME" />
+      <div class="admin-gate-dialog__actions">
+        <button type="button" class="btn bm" id="admin-gate-coord-continue">Open event view</button>
+        <button type="button" class="btn bo" id="admin-gate-back-coord">Back</button>
+      </div>
+      <p id="admin-gate-coord-err" class="admin-gate-dialog__err is-hidden" role="alert"></p>
+    </div>
+    <div id="admin-gate-step-fullsecret" class="admin-gate-step is-hidden">
+      <p class="admin-gate-dialog__title">Full admin</p>
+      <p class="admin-gate-dialog__hint">Second-level authentication: enter the admin portal secret (same value as <code>ADMIN_PORTAL_SECRET</code> on the server).</p>
+      <input type="password" id="admin-gate-admin-secret" class="admin-gate-dialog__input" autocomplete="off" placeholder="Admin secret" />
+      <div class="admin-gate-dialog__actions">
+        <button type="button" class="btn bm" id="admin-gate-full-continue">Continue</button>
+        <button type="button" class="btn bo" id="admin-gate-back-full">Back</button>
+        <button type="button" class="btn bo" id="admin-gate-cancel-full">Cancel</button>
+      </div>
+      <p id="admin-gate-admin-err" class="admin-gate-dialog__err is-hidden" role="alert"></p>
+    </div>
+  </div>
+</div>
 
 <!-- Master-Level Polish Dependencies -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vanilla-tilt/1.8.1/vanilla-tilt.min.js"></script>
@@ -542,6 +601,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
 <script src="config.js"></script>
+<script src="shared-registrations.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
