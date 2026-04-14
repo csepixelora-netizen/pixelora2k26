@@ -16,7 +16,7 @@ const SR = window.PixeloraSharedReg;
 if (!SR || typeof SR.transformRegistration !== 'function') {
   throw new Error('shared-registrations.js must load before admin.js');
 }
-const { transformRegistration, resolveLeaderContact, personDedupeKey } = SR;
+const { transformRegistration, resolveLeaderContact, formatAffiliatedName, formatFoodPreference, personDedupeKey, getEventVenueLabel } = SR;
 
 const ADMIN_SHORTCUT_AUTH_KEY = 'pixelora-admin-shortcut-auth';
 const ADMIN_RAW_VIEWER_KEY = 'pixelora-admin-raw-viewer';
@@ -25,14 +25,28 @@ const ADMIN_VIEWER_PASSWORD = 'CSE';
 const TECH_EXPORT_COLS = [
   'Team ID',
   'Event Name',
+  'College Name',
+  'Department Name',
+  'Venue',
   'Team Leader Name',
   'Leader Mobile Number',
   'Team Size',
   'Team Member Names',
-  'Team Member Mobile Numbers'
+  'Team member details (name · college · dept)',
+  'Team Member Mobile Numbers',
+  'Team member food preferences'
 ];
 const NT_EXPORT_COLS = [...TECH_EXPORT_COLS];
-const FOOD_EXPORT_COLS = ['Name', 'Mobile Number', 'Food Preference', 'Event Participation', 'Team ID'];
+const FOOD_EXPORT_COLS = [
+  'Name',
+  'College Name',
+  'Department Name',
+  'Mobile Number',
+  'Meal',
+  'As recorded',
+  'Event Participation',
+  'Team ID'
+];
 let unlockedSecret = '';
 let cachedRegistrations = [];
 let selectedRegistrationId = '';
@@ -125,31 +139,14 @@ function setRawViewerUnlocked(on) {
   else sessionStorage.removeItem(ADMIN_RAW_VIEWER_KEY);
 }
 
-function classifyMealPreference(foodRaw) {
-  const food = String(foodRaw || '').trim().toLowerCase();
-  if (!food) return 'unknown';
-  const nonVeg = /non\s*-?\s*veg|nonveg|meat|chicken|mutton|beef|pork|fish|seafood|egg/i.test(food);
-  if (nonVeg) return 'nonveg';
-  const veg = /\bveg\b|vegetarian|vegan|sattvik|pure\s*veg/i.test(food) || (food.includes('veg') && !food.includes('non'));
-  if (veg) return 'veg';
-  return 'unknown';
-}
-
-function foodPreferenceLabel(foodRaw) {
-  const c = classifyMealPreference(foodRaw);
-  if (c === 'veg') return 'Veg';
-  if (c === 'nonveg') return 'Non-Veg';
-  return String(foodRaw || '').trim() || 'Unknown';
-}
-
 function summarizeFoods(people) {
   const foods = [];
   const seen = new Set();
   people.forEach((p) => {
-    const f = String(p.food || '').trim();
-    if (!f || seen.has(f.toLowerCase())) return;
-    seen.add(f.toLowerCase());
-    foods.push(f);
+    const lbl = formatFoodPreference(p.food);
+    if (lbl === '\u2014' || seen.has(lbl)) return;
+    seen.add(lbl);
+    foods.push(lbl);
   });
   return foods.length ? foods.join(' · ') : '—';
 }
@@ -164,14 +161,26 @@ function buildTechnicalExportRows(registrations) {
     const leaderContact = resolveLeaderContact(clean, tech.team?.leader);
     const members = Array.isArray(tech.team?.members) ? tech.team.members : [];
     const teamSize = 1 + members.length;
+    const pr = clean.primaryRegistrant || {};
     rows.push({
       'Team ID': teamId,
       'Event Name': tech.name,
+      'College Name': String(pr.collegeName || '').trim(),
+      'Department Name': String(pr.departmentName || '').trim(),
+      Venue: getEventVenueLabel(tech.name),
       'Team Leader Name': leaderContact.name || '',
       'Leader Mobile Number': String(leaderContact.phone || '').trim(),
       'Team Size': teamSize,
       'Team Member Names': members.map((m) => m.name).filter(Boolean).join(', '),
-      'Team Member Mobile Numbers': members.map((m) => String(m.phone || '').trim()).filter(Boolean).join(', ')
+      'Team member details (name · college · dept)': members
+        .map((m) => formatAffiliatedName(m.name, m.collegeName, m.departmentName))
+        .filter(Boolean)
+        .join('; '),
+      'Team Member Mobile Numbers': members.map((m) => String(m.phone || '').trim()).filter(Boolean).join(', '),
+      'Team member food preferences': members
+        .map((m) => formatFoodPreference(m.food))
+        .filter((s) => s && s !== '\u2014')
+        .join('; ')
     });
   });
   return rows;
@@ -187,14 +196,26 @@ function buildNonTechnicalExportRows(registrations) {
     const leaderContact = resolveLeaderContact(clean, block.team?.leader);
     const members = Array.isArray(block.team?.members) ? block.team.members : [];
     const teamSize = 1 + members.length;
+    const pr = clean.primaryRegistrant || {};
     rows.push({
       'Team ID': teamId,
       'Event Name': block.name,
+      'College Name': String(pr.collegeName || '').trim(),
+      'Department Name': String(pr.departmentName || '').trim(),
+      Venue: getEventVenueLabel(block.name),
       'Team Leader Name': leaderContact.name || '',
       'Leader Mobile Number': String(leaderContact.phone || '').trim(),
       'Team Size': teamSize,
       'Team Member Names': members.map((m) => m.name).filter(Boolean).join(', '),
-      'Team Member Mobile Numbers': members.map((m) => String(m.phone || '').trim()).filter(Boolean).join(', ')
+      'Team member details (name · college · dept)': members
+        .map((m) => formatAffiliatedName(m.name, m.collegeName, m.departmentName))
+        .filter(Boolean)
+        .join('; '),
+      'Team Member Mobile Numbers': members.map((m) => String(m.phone || '').trim()).filter(Boolean).join(', '),
+      'Team member food preferences': members
+        .map((m) => formatFoodPreference(m.food))
+        .filter((s) => s && s !== '\u2014')
+        .join('; ')
     });
   });
   return rows;
@@ -240,39 +261,67 @@ function participationForPerson(clean, personName) {
 
 function buildFoodExportRows(registrations) {
   const rows = [];
-  const seenGlobal = new Set();
 
   registrations.forEach((raw) => {
     const clean = transformRegistration(raw);
     const teamId = String(clean.id || '');
-    const add = (person) => {
+    const rowByKey = new Map();
+    const merge = (person) => {
       const name = String(person?.name || '').trim();
       const phone = String(person?.phone || '').trim();
       if (!name && !phone) return;
-      const key = personDedupeKey(name, phone, teamId);
-      if (seenGlobal.has(key)) return;
-      seenGlobal.add(key);
-      rows.push({
-        Name: name || '—',
-        'Mobile Number': phone,
-        'Food Preference': foodPreferenceLabel(person?.food),
-        'Event Participation': participationForPerson(clean, name),
-        'Team ID': teamId
+      const key = personDedupeKey({ name, phone, email: person?.email }, teamId);
+      if (!key) return;
+      const next = {
+        participationName: name,
+        displayName: name || '—',
+        collegeName: String(person?.collegeName || '').trim(),
+        departmentName: String(person?.departmentName || '').trim(),
+        phone,
+        email: String(person?.email || '').trim(),
+        food: String(person?.food || '').trim()
+      };
+      const prev = rowByKey.get(key);
+      if (!prev) {
+        rowByKey.set(key, next);
+        return;
+      }
+      rowByKey.set(key, {
+        participationName: prev.participationName || next.participationName,
+        displayName: prev.displayName || next.displayName,
+        collegeName: prev.collegeName || next.collegeName,
+        departmentName: prev.departmentName || next.departmentName,
+        phone: prev.phone || next.phone,
+        email: prev.email || next.email,
+        food: prev.food || next.food
       });
     };
 
-    add(clean.primaryRegistrant);
+    merge(clean.primaryRegistrant);
 
     const tech = clean.events?.technical;
     if (tech?.team) {
-      add(resolveLeaderContact(clean, tech.team.leader));
-      (tech.team.members || []).forEach(add);
+      merge(resolveLeaderContact(clean, tech.team.leader));
+      (tech.team.members || []).forEach(merge);
     }
     const nt = clean.events?.nonTechnical;
     if (nt?.team) {
-      add(resolveLeaderContact(clean, nt.team.leader));
-      (nt.team.members || []).forEach(add);
+      merge(resolveLeaderContact(clean, nt.team.leader));
+      (nt.team.members || []).forEach(merge);
     }
+
+    rowByKey.forEach((r) => {
+      rows.push({
+        Name: r.displayName,
+        'College Name': r.collegeName,
+        'Department Name': r.departmentName,
+        'Mobile Number': r.phone,
+        Meal: formatFoodPreference(r.food),
+        'As recorded': String(r.food || '').trim() || '—',
+        'Event Participation': participationForPerson(clean, r.participationName),
+        'Team ID': teamId
+      });
+    });
   });
 
   return rows;
@@ -403,6 +452,8 @@ function renderPrimarySection(clean) {
           ${primaryKv('College', p.collegeName)}
           ${primaryKv('Department', p.departmentName)}
           ${primaryKv('Year', p.year)}
+          ${primaryKv('Food', formatFoodPreference(p.food))}
+          ${primaryKv('Food (as registered)', String(p.food || '').trim() || '—')}
         </div>
       </div>
     </section>
@@ -422,15 +473,19 @@ function renderTeamBlock(clean, heading, eventBlock) {
   const team = eventBlock.team || {};
   const members = Array.isArray(team.members) ? team.members : [];
   const leaderContact = resolveLeaderContact(clean, team.leader);
-  const leaderRow = `<tr><td class="admin-td-role">Leader</td><td>${escapeHtml(leaderContact.name)}</td><td>${escapeHtml(leaderContact.phone || '—')}</td><td>${escapeHtml(leaderContact.email || '—')}</td></tr>`;
+  const leaderRow = `<tr><td class="admin-td-role">Leader</td><td>${escapeHtml(leaderContact.name)}</td><td>${escapeHtml(leaderContact.collegeName || '—')}</td><td>${escapeHtml(leaderContact.departmentName || '—')}</td><td>${escapeHtml(leaderContact.phone || '—')}</td><td>${escapeHtml(leaderContact.email || '—')}</td><td>${escapeHtml(formatFoodPreference(leaderContact.food))}</td><td>${escapeHtml(String(leaderContact.food || '').trim() || '—')}</td></tr>`;
   const memberRows = members
     .map(
       (m, i) => `
     <tr>
       <td class="admin-td-role">M${i + 1}</td>
       <td>${escapeHtml(m.name || '—')}</td>
+      <td>${escapeHtml(m.collegeName || '—')}</td>
+      <td>${escapeHtml(m.departmentName || '—')}</td>
       <td>${escapeHtml(m.phone || '—')}</td>
       <td>${escapeHtml(m.email || '—')}</td>
+      <td>${escapeHtml(formatFoodPreference(m.food))}</td>
+      <td>${escapeHtml(String(m.food || '').trim() || '—')}</td>
     </tr>`
     )
     .join('');
@@ -442,7 +497,7 @@ function renderTeamBlock(clean, heading, eventBlock) {
       </div>
       <div class="admin-panel admin-panel--table admin-panel--dense">
         <table class="admin-data-table admin-data-table--dense">
-          <thead><tr><th>Role</th><th>Name</th><th>Phone</th><th>Email</th></tr></thead>
+          <thead><tr><th>Role</th><th>Name</th><th>College</th><th>Department</th><th>Phone</th><th>Email</th><th>Meal</th><th>As recorded</th></tr></thead>
           <tbody>${leaderRow}${memberRows}</tbody>
         </table>
       </div>
@@ -453,9 +508,32 @@ function renderTeamBlock(clean, heading, eventBlock) {
 function collectFoodPeopleForRegistration(clean) {
   const people = [];
   const pushU = (p) => {
-    const k = personDedupeKey(p?.name, p?.phone, clean.id);
-    if (!k || people.some((x) => x._k === k)) return;
-    people.push({ _k: k, name: p.name, phone: p.phone, food: p.food });
+    if (!String(p?.name || '').trim() && !String(p?.phone || '').trim()) return;
+    const k = personDedupeKey(p, clean.id);
+    if (!k) return;
+    const idx = people.findIndex((x) => x._k === k);
+    const row = {
+      _k: k,
+      name: p.name,
+      phone: String(p.phone || '').trim(),
+      email: String(p.email || '').trim(),
+      food: p.food,
+      collegeName: String(p.collegeName || '').trim(),
+      departmentName: String(p.departmentName || '').trim()
+    };
+    if (idx === -1) {
+      people.push(row);
+      return;
+    }
+    const cur = people[idx];
+    people[idx] = {
+      ...cur,
+      phone: String(cur.phone || row.phone || '').trim(),
+      email: String(cur.email || row.email || '').trim(),
+      food: String(cur.food || row.food || '').trim(),
+      collegeName: String(cur.collegeName || row.collegeName || '').trim(),
+      departmentName: String(cur.departmentName || row.departmentName || '').trim()
+    };
   };
   pushU(clean.primaryRegistrant);
   const tech = clean.events?.technical;
@@ -505,9 +583,11 @@ function renderFoodSummarySection(clean) {
       (x) => `
     <tr>
       <td>${escapeHtml(x.name || '—')}</td>
+      <td>${escapeHtml(x.collegeName || '—')}</td>
+      <td>${escapeHtml(x.departmentName || '—')}</td>
       <td>${escapeHtml(x.phone || '—')}</td>
-      <td>${escapeHtml(foodPreferenceLabel(x.food))}</td>
-      <td>${escapeHtml(String(x.food || '—'))}</td>
+      <td>${escapeHtml(formatFoodPreference(x.food))}</td>
+      <td>${escapeHtml(String(x.food || '').trim() || '—')}</td>
     </tr>`
     )
     .join('');
@@ -519,8 +599,8 @@ function renderFoodSummarySection(clean) {
       </div>
       <div class="admin-panel admin-panel--table admin-panel--dense">
         <table class="admin-data-table admin-data-table--dense">
-          <thead><tr><th>Name</th><th>Phone</th><th>Type</th><th>Raw</th></tr></thead>
-          <tbody>${rows || '<tr><td colspan="4" class="admin-muted">No entries</td></tr>'}</tbody>
+          <thead><tr><th>Name</th><th>College</th><th>Department</th><th>Phone</th><th>Meal</th><th>As recorded</th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="6" class="admin-muted">No entries</td></tr>'}</tbody>
         </table>
       </div>
     </section>
@@ -588,20 +668,45 @@ function downloadSingleRegistrationPdf(raw, clean) {
     ['Phone', p.phone || ''],
     ['College', p.collegeName || ''],
     ['Department', p.departmentName || ''],
-    ['Year', p.year || '']
+    ['Year', p.year || ''],
+    ['Meal', formatFoodPreference(p.food)],
+    ['Food (as registered)', String(p.food || '').trim() || '—']
   ];
   doc.autoTable({ startY: y, head: [['Primary', '']], body: primaryRows, theme: 'striped', styles: { fontSize: 9 } });
   y = doc.lastAutoTable.finalY + 16;
 
+  const teamHead = [['Role', 'Name', 'College', 'Department', 'Phone', 'Email', 'Meal', 'As recorded']];
   const tech = clean.events?.technical;
   if (tech?.name) {
     const leader = resolveLeaderContact(clean, tech.team?.leader);
     const mems = tech.team?.members || [];
-    const body = [['Leader', leader.name, leader.phone, leader.email]];
-    mems.forEach((m, i) => body.push([`Member ${i + 1}`, m.name || '', m.phone || '', m.email || '']));
+    const body = [
+      [
+        'Leader',
+        leader.name || '',
+        leader.collegeName || '',
+        leader.departmentName || '',
+        leader.phone || '',
+        leader.email || '',
+        formatFoodPreference(leader.food),
+        String(leader.food || '').trim()
+      ]
+    ];
+    mems.forEach((m, i) =>
+      body.push([
+        `Member ${i + 1}`,
+        m.name || '',
+        m.collegeName || '',
+        m.departmentName || '',
+        m.phone || '',
+        m.email || '',
+        formatFoodPreference(m.food),
+        String(m.food || '').trim()
+      ])
+    );
     doc.text(`Technical: ${tech.name}`, 40, y);
     y += 12;
-    doc.autoTable({ startY: y, head: [['Role', 'Name', 'Phone', 'Email']], body, styles: { fontSize: 8 } });
+    doc.autoTable({ startY: y, head: teamHead, body, styles: { fontSize: 7 } });
     y = doc.lastAutoTable.finalY + 16;
   }
 
@@ -609,11 +714,60 @@ function downloadSingleRegistrationPdf(raw, clean) {
   if (nt?.name) {
     const leader = resolveLeaderContact(clean, nt.team?.leader);
     const mems = nt.team?.members || [];
-    const body = [['Leader', leader.name, leader.phone, leader.email]];
-    mems.forEach((m, i) => body.push([`Member ${i + 1}`, m.name || '', m.phone || '', m.email || '']));
+    const body = [
+      [
+        'Leader',
+        leader.name || '',
+        leader.collegeName || '',
+        leader.departmentName || '',
+        leader.phone || '',
+        leader.email || '',
+        formatFoodPreference(leader.food),
+        String(leader.food || '').trim()
+      ]
+    ];
+    mems.forEach((m, i) =>
+      body.push([
+        `Member ${i + 1}`,
+        m.name || '',
+        m.collegeName || '',
+        m.departmentName || '',
+        m.phone || '',
+        m.email || '',
+        formatFoodPreference(m.food),
+        String(m.food || '').trim()
+      ])
+    );
     doc.text(`Non-technical: ${nt.name}`, 40, y);
     y += 12;
-    doc.autoTable({ startY: y, head: [['Role', 'Name', 'Phone', 'Email']], body, styles: { fontSize: 8 } });
+    doc.autoTable({ startY: y, head: teamHead, body, styles: { fontSize: 7 } });
+    y = doc.lastAutoTable.finalY + 16;
+  }
+
+  const foodPeople = collectFoodPeopleForRegistration(clean);
+  if (foodPeople.length) {
+    if (y > 640) {
+      doc.addPage();
+      y = 40;
+    }
+    doc.setFontSize(10);
+    doc.text('Food preferences', 40, y);
+    y += 14;
+    doc.setFontSize(8);
+    const fbody = foodPeople.map((x) => [
+      x.name || '',
+      x.collegeName || '',
+      x.departmentName || '',
+      x.phone || '',
+      formatFoodPreference(x.food),
+      String(x.food || '').trim()
+    ]);
+    doc.autoTable({
+      startY: y,
+      head: [['Name', 'College', 'Department', 'Phone', 'Meal', 'As recorded']],
+      body: fbody,
+      styles: { fontSize: 7 }
+    });
   }
 
   doc.save(`pixelora-registration-${String(clean.id).slice(0, 8)}.pdf`);

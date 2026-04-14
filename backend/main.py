@@ -13,10 +13,12 @@ from urllib.parse import urlparse
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+
+from food_migration import apply_food_patches
 
 # Paths
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -127,6 +129,7 @@ ALLOWED_FOOD = {"Veg", "Non-Veg"}
 IPL_TOTAL_SLOTS = 10
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+UPI_VPA_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,253}@[a-zA-Z][a-zA-Z0-9.-]{1,63}$")
 
 
 @app.get("/api/health")
@@ -148,6 +151,7 @@ def sanitize_registration_for_surface(record: dict) -> dict:
     """Strip sensitive fields for coordinator / surface-tier clients."""
     out = dict(record)
     out.pop("paymentScreenshot", None)
+    out.pop("payerUpiId", None)
     return out
 
 
@@ -255,65 +259,139 @@ def _parse_primary_registrant(record: dict) -> dict:
     }
 
 
+def _normalize_match_name(value: object) -> str:
+    s = str(value or "").strip().lower()
+    return re.sub(r"\s+", " ", s)
+
+
+def _merge_member_dicts(a: dict, b: dict) -> dict:
+    def best(x: object, y: object) -> str:
+        tx = str(x or "").strip()
+        ty = str(y or "").strip()
+        return ty or tx
+
+    out = {**a, **b}
+    out["memberId"] = best(a.get("memberId"), b.get("memberId")) or str(a.get("memberId") or b.get("memberId") or "").strip()
+    out["name"] = best(a.get("name"), b.get("name")) or str(a.get("name") or b.get("name") or "").strip()
+    out["email"] = best(a.get("email"), b.get("email"))
+    out["phone"] = best(a.get("phone"), b.get("phone"))
+    out["food"] = best(a.get("food"), b.get("food"))
+    out["collegeName"] = best(a.get("collegeName"), b.get("collegeName"))
+    out["departmentName"] = best(a.get("departmentName"), b.get("departmentName"))
+    out["technicalEvent"] = best(a.get("technicalEvent"), b.get("technicalEvent"))
+    out["nonTechnicalEvent"] = best(a.get("nonTechnicalEvent"), b.get("nonTechnicalEvent"))
+    out["technical_used"] = bool(a.get("technical_used") or b.get("technical_used"))
+    out["nontechnical_used"] = bool(a.get("nontechnical_used") or b.get("nontechnical_used"))
+    return out
+
+
 def _member_pool(record: dict) -> list[dict]:
     combined: list[dict] = []
     for member in _parse_json_array(record.get("teamMembers", [])):
         if isinstance(member, dict):
             combined.append(member)
 
-    session = record.get("sessionData")
+    session_raw = record.get("sessionData")
+    session = session_raw if isinstance(session_raw, dict) else _parse_json_object(session_raw)
     if isinstance(session, dict):
         for member in _parse_json_array(session.get("teamMembers", [])):
             if isinstance(member, dict):
                 combined.append(member)
 
-    unique: list[dict] = []
-    seen: set[str] = set()
+    by_key: dict[str, dict] = {}
     for member in combined:
         member_id = str(member.get("memberId", "") or "").strip().lower()
         email = str(member.get("email", "") or "").strip().lower()
-        name = str(member.get("name", "") or "").strip().lower()
-        key = member_id or f"{email}|{name}"
-        if not key or key in seen:
+        name_key = _normalize_match_name(member.get("name", ""))
+        key = member_id or f"{email}|{name_key}"
+        if not key:
             continue
-        seen.add(key)
-        unique.append(member)
-    return unique
+        if key not in by_key:
+            by_key[key] = dict(member)
+        else:
+            by_key[key] = _merge_member_dicts(by_key[key], member)
+    return list(by_key.values())
 
 
 def _resolve_contact(name: str, pool: list[dict], primary: dict) -> dict:
     label = str(name or "").strip()
     if not label:
-        return {"name": "", "email": "", "phone": "", "food": ""}
-    lowered = label.lower()
+        return {"name": "", "email": "", "phone": "", "food": "", "collegeName": "", "departmentName": ""}
+    name_key = _normalize_match_name(label)
     for member in pool:
-        if str(member.get("name", "") or "").strip().lower() == lowered:
+        if _normalize_match_name(member.get("name", "")) == name_key:
             return {
                 "name": label,
                 "email": str(member.get("email", "") or "").strip(),
                 "phone": str(member.get("phone", "") or "").strip(),
                 "food": str(member.get("food", "") or "").strip(),
+                "collegeName": str(member.get("collegeName", "") or "").strip(),
+                "departmentName": str(member.get("departmentName", "") or "").strip(),
             }
-    if str(primary.get("name", "") or "").strip().lower() == lowered:
+    if _normalize_match_name(primary.get("name", "")) == name_key:
         return {
             "name": label,
             "email": str(primary.get("email", "") or "").strip(),
             "phone": str(primary.get("phone", "") or "").strip(),
             "food": str(primary.get("food", "") or "").strip(),
+            "collegeName": str(primary.get("collegeName", "") or "").strip(),
+            "departmentName": str(primary.get("departmentName", "") or "").strip(),
         }
-    return {"name": label, "email": "", "phone": "", "food": ""}
+    return {"name": label, "email": "", "phone": "", "food": "", "collegeName": "", "departmentName": ""}
 
 
 def _dedupe_contacts(contacts: list[dict]) -> list[dict]:
     output: list[dict] = []
     seen: set[str] = set()
     for contact in contacts:
-        key = str(contact.get("email", "") or "").strip().lower() or str(contact.get("name", "") or "").strip().lower()
+        key = str(contact.get("email", "") or "").strip().lower() or _normalize_match_name(contact.get("name", ""))
         if not key or key in seen:
             continue
         seen.add(key)
         output.append(contact)
     return output
+
+
+def _enrich_event_team_members(block: dict | None, pool: list[dict], primary: dict) -> dict | None:
+    if not block or not isinstance(block, dict):
+        return block
+    team = block.get("team")
+    if not isinstance(team, dict):
+        return block
+    members = team.get("members")
+    if not isinstance(members, list):
+        return block
+    out_members: list[dict] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        nm = str(m.get("name", "") or "").strip()
+        if not nm:
+            out_members.append(m)
+            continue
+        r = _resolve_contact(nm, pool, primary)
+        out_members.append(
+            {
+                **m,
+                "email": str(r.get("email") or m.get("email") or "").strip(),
+                "phone": str(r.get("phone") or m.get("phone") or "").strip(),
+                "food": str(r.get("food") or m.get("food") or "").strip(),
+                "collegeName": str(r.get("collegeName") or m.get("collegeName") or "").strip(),
+                "departmentName": str(r.get("departmentName") or m.get("departmentName") or "").strip(),
+            }
+        )
+    return {**block, "team": {**team, "members": out_members}}
+
+
+def _apply_events_contact_enrichment(events: dict, pool: list[dict], primary: dict) -> dict:
+    if not isinstance(events, dict):
+        return events
+    tech = events.get("technical")
+    nt = events.get("nonTechnical")
+    return {
+        "technical": _enrich_event_team_members(tech if isinstance(tech, dict) else None, pool, primary),
+        "nonTechnical": _enrich_event_team_members(nt if isinstance(nt, dict) else None, pool, primary),
+    }
 
 
 def _build_event_block(
@@ -333,15 +411,16 @@ def _build_event_block(
     leader = str(team.get("teamLeader") or primary.get("name") or "").strip()
     roster_names: list[str] = []
     seen_lower: set[str] = set()
+    leader_key = _normalize_match_name(leader) if leader else ""
 
     for raw_name in team.get("members") or []:
         teammate = str(raw_name or "").strip()
         if not teammate:
             continue
-        lowered = teammate.lower()
+        lowered = _normalize_match_name(teammate)
         if lowered in seen_lower:
             continue
-        if leader and lowered == leader.lower():
+        if leader_key and lowered == leader_key:
             continue
         seen_lower.add(lowered)
         roster_names.append(teammate)
@@ -355,8 +434,8 @@ def _build_event_block(
         teammate = str(member.get("name", "") or "").strip()
         if not teammate:
             continue
-        lowered = teammate.lower()
-        if leader and lowered == leader.lower():
+        lowered = _normalize_match_name(teammate)
+        if leader_key and lowered == leader_key:
             continue
         if lowered in seen_lower:
             continue
@@ -396,12 +475,18 @@ def normalize_record(record: dict) -> dict:
     session_raw = record.get("sessionData", {})
     session_data = session_raw if isinstance(session_raw, dict) else _parse_json_object(session_raw)
 
-    team_members_raw = _parse_json_array(record.get("teamMembers", []))
-    team_members = [m for m in team_members_raw if isinstance(m, dict)]
-
     primary = _parse_primary_registrant(record)
+    if not str(primary.get("food") or "").strip() and record.get("food"):
+        primary["food"] = str(record.get("food", "")).strip()
+    if not str(primary.get("phone") or "").strip() and record.get("whatsapp"):
+        primary["phone"] = str(record.get("whatsapp", "")).strip()
+    if not str(primary.get("collegeName") or "").strip() and record.get("collegeName"):
+        primary["collegeName"] = str(record.get("collegeName", "")).strip()
+    if not str(primary.get("departmentName") or "").strip() and record.get("departmentName"):
+        primary["departmentName"] = str(record.get("departmentName", "")).strip()
     pool = _member_pool(record)
-    events = build_events_structure(primary, record, pool)
+    team_members = [dict(m) for m in pool]
+    events = _apply_events_contact_enrichment(build_events_structure(primary, record, pool), pool, primary)
 
     return {
         "id": record.get("id", ""),
@@ -416,6 +501,7 @@ def normalize_record(record: dict) -> dict:
         "nonTechnicalEvents": record.get("nonTechnicalEvents", ""),
         "nonTechnicalTeam": _normalize_team_object(record.get("nonTechnicalTeam", {})),
         "food": record.get("food", ""),
+        "payerUpiId": str(record.get("payerUpiId", "") or "").strip(),
         "paymentScreenshot": record.get("paymentScreenshot", ""),
         "sessionData": session_data,
         "teamMembers": team_members,
@@ -631,6 +717,7 @@ def flatten_registration_for_csv(record: dict) -> dict:
         "nonTechnicalTeamSize": non_technical_team.get("teamSize", ""),
         "nonTechnicalTeamMembers": ", ".join(non_technical_team.get("members", []) or []),
         "food": record.get("food", ""),
+        "payerUpiId": record.get("payerUpiId", ""),
         "paymentScreenshot": record.get("paymentScreenshot", ""),
         "sessionData": json.dumps(record.get("sessionData", {}), ensure_ascii=True),
         "teamMembers": json.dumps(record.get("teamMembers", []), ensure_ascii=True),
@@ -680,6 +767,7 @@ def download_admin_registrations_csv(x_admin_secret: str | None = Header(default
         "nonTechnicalTeamSize",
         "nonTechnicalTeamMembers",
         "food",
+        "payerUpiId",
         "paymentScreenshot",
         "sessionData",
         "teamMembers",
@@ -725,6 +813,60 @@ def delete_single_admin_registration(
     return {"deleted": True, "id": rid, **slots}
 
 
+@app.post("/api/admin/migrations/backfill-food")
+def admin_backfill_registration_food(
+    apply: bool = Query(False, description="When true, write normalized food fields to Firestore."),
+    x_admin_secret: str | None = Header(default=None),
+) -> dict[str, object]:
+    """
+    Normalize meal preferences: empty, hyphen, em dash, and unknown values become Non-Veg;
+    common spellings map to Veg / Non-Veg. Patches root ``food``, ``primaryRegistrant``,
+    ``teamMembers``, ``sessionData``, and ``events`` where present.
+    """
+    require_admin_secret(x_admin_secret)
+    if firebase_db is None:
+        raise HTTPException(status_code=503, detail="Firestore is not configured.")
+
+    scanned = 0
+    to_change = 0
+    sample: list[dict[str, object]] = []
+    pending: list[tuple[object, dict[str, object]]] = []
+
+    for document in firebase_db.collection("registrations").stream():
+        scanned += 1
+        raw = document.to_dict() or {}
+        patched, changes = apply_food_patches(raw)
+        if not changes:
+            continue
+        to_change += 1
+        if apply:
+            pending.append((document.reference, patched))
+        if len(sample) < 25:
+            sample.append({"id": document.id, "changes": changes})
+
+    if apply and pending:
+        batch = firebase_db.batch()
+        n = 0
+        for ref, patched in pending:
+            batch.set(ref, patched)
+            n += 1
+            if n >= 400:
+                batch.commit()
+                batch = firebase_db.batch()
+                n = 0
+        if n:
+            batch.commit()
+
+    return {
+        "dryRun": not apply,
+        "apply": apply,
+        "scanned": scanned,
+        "documentsWithChanges": to_change,
+        "written": apply and to_change > 0,
+        "sample": sample,
+    }
+
+
 @app.post("/api/registrations")
 async def create_registration(
     name: str = Form(...),
@@ -744,6 +886,7 @@ async def create_registration(
     nonTechnicalTeamSize: str | None = Form(None),
     nonTechnicalTeamMembers: str | None = Form(None),
     food: str = Form(...),
+    payerUpiId: str = Form(""),
     sessionData: str | None = Form(None),
     teamMembers: str | None = Form(None),
     paymentScreenshot: UploadFile = File(...),
@@ -765,6 +908,7 @@ async def create_registration(
     nonTechnicalTeamSize = (nonTechnicalTeamSize or '').strip() or None
     nonTechnicalTeamMembers = (nonTechnicalTeamMembers or '').strip() or None
     food = food.strip()
+    payer_upi_id = (payerUpiId or "").strip()
     sessionData = (sessionData or '').strip() or None
     teamMembers = (teamMembers or '').strip() or None
 
@@ -794,6 +938,9 @@ async def create_registration(
 
     if food not in ALLOWED_FOOD:
         raise HTTPException(status_code=400, detail="Invalid food selection.")
+
+    if payer_upi_id and not UPI_VPA_PATTERN.match(payer_upi_id):
+        raise HTTPException(status_code=400, detail="Invalid payer UPI ID format.")
 
     if not paymentScreenshot.content_type or not paymentScreenshot.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Payment screenshot must be an image.")
@@ -904,10 +1051,13 @@ async def create_registration(
         "nonTechnicalTeam": non_technical_team,
         "teamMembers": parsed_team_members,
     }
-    events = build_events_structure(primary_registrant, synthetic_record, parsed_team_members)
-
-    if isinstance(parsed_session_data, dict):
-        parsed_session_data = {key: value for key, value in parsed_session_data.items() if key != "teamMembers"}
+    session_dict = parsed_session_data if isinstance(parsed_session_data, dict) else {}
+    enrich_pool = _member_pool({"teamMembers": parsed_team_members, "sessionData": session_dict})
+    events = _apply_events_contact_enrichment(
+        build_events_structure(primary_registrant, synthetic_record, enrich_pool),
+        enrich_pool,
+        primary_registrant,
+    )
 
     record = {
         "id": registration_id,
@@ -922,9 +1072,10 @@ async def create_registration(
         "technicalTeam": technical_team,
         "nonTechnicalTeam": non_technical_team,
         "food": food,
+        "payerUpiId": payer_upi_id,
         "paymentScreenshot": payment_screenshot_ref,
         "sessionData": parsed_session_data,
-        "teamMembers": [],
+        "teamMembers": parsed_team_members,
         "primaryRegistrant": primary_registrant,
         "events": events,
         "createdAt": created_at,

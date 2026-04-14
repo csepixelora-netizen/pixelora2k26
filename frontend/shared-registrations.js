@@ -9,6 +9,37 @@ const EMPTY_PRIMARY = {
   food: ''
 };
 
+function normalizeMatchName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/** Prefer non-empty fields when the same person appears twice (e.g. root teamMembers + sessionData). */
+function mergeMemberRecords(a, b) {
+  const best = (x, y) => {
+    const tx = String(x ?? '').trim();
+    const ty = String(y ?? '').trim();
+    return ty || tx;
+  };
+  return {
+    ...a,
+    ...b,
+    memberId: best(a.memberId, b.memberId) || String(a.memberId || b.memberId || '').trim(),
+    name: best(a.name, b.name) || String(a.name || b.name || '').trim(),
+    email: best(a.email, b.email),
+    phone: best(a.phone, b.phone),
+    food: best(a.food, b.food),
+    collegeName: best(a.collegeName, b.collegeName),
+    departmentName: best(a.departmentName, b.departmentName),
+    technicalEvent: best(a.technicalEvent, b.technicalEvent),
+    nonTechnicalEvent: best(a.nonTechnicalEvent, b.nonTechnicalEvent),
+    technical_used: Boolean(a.technical_used || b.technical_used),
+    nontechnical_used: Boolean(a.nontechnical_used || b.nontechnical_used)
+  };
+}
+
 function transformRegistration(raw) {
   const pr = raw.primaryRegistrant;
   const ev = raw.events;
@@ -20,15 +51,26 @@ function transformRegistration(raw) {
     Object.prototype.hasOwnProperty.call(ev, 'nonTechnical');
 
   if (hasPrimary && hasEvents) {
-    const session = raw.sessionData && typeof raw.sessionData === 'object' ? raw.sessionData : {};
+    const session = getSessionDataObject(raw);
+    const primary = { ...EMPTY_PRIMARY, ...pr };
+    if (!String(primary.phone || '').trim() && raw.whatsapp) primary.phone = String(raw.whatsapp || '').trim();
+    if (!String(primary.food || '').trim() && raw.food) primary.food = String(raw.food || '').trim();
+    if (!String(primary.collegeName || '').trim() && raw.collegeName) primary.collegeName = String(raw.collegeName || '').trim();
+    if (!String(primary.departmentName || '').trim() && raw.departmentName) {
+      primary.departmentName = String(raw.departmentName || '').trim();
+    }
+    const pool = mergedMemberPool(raw);
+    const rebuilt = buildEventsStructureJs(primary, raw, pool);
+    const events = applyEventsEnrichment(rebuilt, pool, primary);
     return {
       id: raw.id || '',
       createdAt: raw.createdAt || '',
-      primaryRegistrant: { ...EMPTY_PRIMARY, ...pr },
+      primaryRegistrant: primary,
       events: {
-        technical: ev.technical || null,
-        nonTechnical: ev.nonTechnical || null
+        technical: events.technical || null,
+        nonTechnical: events.nonTechnical || null
       },
+      _memberPool: pool,
       _meta: {
         paymentScreenshot: raw.paymentScreenshot || '',
         wizardStep: session.step
@@ -51,17 +93,31 @@ function parseJsonArray(value) {
   return [];
 }
 
+/** Wizard snapshot: APIs sometimes return sessionData as a JSON string (e.g. CSV export path). */
+function getSessionDataObject(raw) {
+  const sd = raw?.sessionData;
+  if (sd && typeof sd === 'object' && !Array.isArray(sd)) return sd;
+  if (typeof sd === 'string' && sd.trim()) {
+    try {
+      const p = JSON.parse(sd);
+      return p && typeof p === 'object' && !Array.isArray(p) ? p : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
 function mergedMemberPool(raw) {
   const combined = [];
   parseJsonArray(raw.teamMembers).forEach((m) => {
     if (m && typeof m === 'object') combined.push(m);
   });
-  const session = raw.sessionData && typeof raw.sessionData === 'object' ? raw.sessionData : {};
+  const session = getSessionDataObject(raw);
   parseJsonArray(session.teamMembers).forEach((m) => {
     if (m && typeof m === 'object') combined.push(m);
   });
-  const out = [];
-  const seen = new Set();
+  const byKey = new Map();
   combined.forEach((m) => {
     const key =
       String(m.memberId || '')
@@ -69,14 +125,42 @@ function mergedMemberPool(raw) {
         .toLowerCase() ||
       `${String(m.email || '')
         .trim()
-        .toLowerCase()}|${String(m.name || '')
-        .trim()
-        .toLowerCase()}`;
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    out.push(m);
+        .toLowerCase()}|${normalizeMatchName(m.name)}`;
+    if (!key) return;
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, { ...m });
+      return;
+    }
+    byKey.set(key, mergeMemberRecords(prev, m));
   });
-  return out;
+  return Array.from(byKey.values());
+}
+
+function enrichEventTeamContacts(block, pool, primary) {
+  if (!block?.team) return block;
+  const members = (block.team.members || []).map((m) => {
+    const nm = String(m?.name || '').trim();
+    if (!nm) return m;
+    const r = resolveContact(nm, pool, primary);
+    return {
+      ...m,
+      email: String(r.email || m.email || '').trim(),
+      phone: String(r.phone || m.phone || '').trim(),
+      food: String(r.food || m.food || '').trim(),
+      collegeName: String(r.collegeName || m.collegeName || '').trim(),
+      departmentName: String(r.departmentName || m.departmentName || '').trim()
+    };
+  });
+  return { ...block, team: { ...block.team, members } };
+}
+
+function applyEventsEnrichment(events, pool, primary) {
+  if (!events || typeof events !== 'object') return events;
+  return {
+    technical: events.technical ? enrichEventTeamContacts(events.technical, pool, primary) : null,
+    nonTechnical: events.nonTechnical ? enrichEventTeamContacts(events.nonTechnical, pool, primary) : null
+  };
 }
 
 function normalizeTeamJs(raw) {
@@ -122,28 +206,42 @@ function parsePrimaryFromLegacy(raw) {
   };
 }
 
+function formatAffiliatedName(name, college, dept) {
+  const n = String(name || '').trim();
+  const c = String(college || '').trim();
+  const d = String(dept || '').trim();
+  const affil = [c, d].filter(Boolean).join(' · ');
+  if (!n && !affil) return '';
+  if (!affil) return n;
+  return `${n} (${affil})`;
+}
+
 function resolveContact(name, pool, primary) {
   const label = String(name || '').trim();
-  if (!label) return { name: '', email: '', phone: '', food: '' };
-  const lowered = label.toLowerCase();
-  const hit = pool.find((m) => String(m.name || '').trim().toLowerCase() === lowered);
+  if (!label) return { name: '', email: '', phone: '', food: '', collegeName: '', departmentName: '' };
+  const nameKey = normalizeMatchName(label);
+  const hit = pool.find((m) => normalizeMatchName(m.name) === nameKey);
   if (hit) {
     return {
       name: label,
       email: String(hit.email || '').trim(),
       phone: String(hit.phone || '').trim(),
-      food: String(hit.food || '').trim()
+      food: String(hit.food || '').trim(),
+      collegeName: String(hit.collegeName || '').trim(),
+      departmentName: String(hit.departmentName || '').trim()
     };
   }
-  if (String(primary.name || '').trim().toLowerCase() === lowered) {
+  if (normalizeMatchName(primary.name) === nameKey) {
     return {
       name: label,
       email: String(primary.email || '').trim(),
       phone: String(primary.phone || '').trim(),
-      food: String(primary.food || '').trim()
+      food: String(primary.food || '').trim(),
+      collegeName: String(primary.collegeName || '').trim(),
+      departmentName: String(primary.departmentName || '').trim()
     };
   }
-  return { name: label, email: '', phone: '', food: '' };
+  return { name: label, email: '', phone: '', food: '', collegeName: '', departmentName: '' };
 }
 
 function dedupeContacts(list) {
@@ -153,9 +251,7 @@ function dedupeContacts(list) {
     const key =
       String(c.email || '')
         .trim()
-        .toLowerCase() || String(c.name || '')
-        .trim()
-        .toLowerCase();
+        .toLowerCase() || normalizeMatchName(c.name);
     if (!key || seen.has(key)) return;
     seen.add(key);
     out.push(c);
@@ -171,12 +267,14 @@ function buildEventBlockJs(eventName, teamBlob, pool, primary, poolEventKey, poo
   const rosterNames = [];
   const seenLower = new Set();
 
+  const leaderKey = leader ? normalizeMatchName(leader) : '';
+
   team.members.forEach((teammate) => {
     const n = String(teammate || '').trim();
     if (!n) return;
-    const nl = n.toLowerCase();
+    const nl = normalizeMatchName(n);
     if (seenLower.has(nl)) return;
-    if (leader && nl === leader.toLowerCase()) return;
+    if (leaderKey && nl === leaderKey) return;
     seenLower.add(nl);
     rosterNames.push(n);
   });
@@ -188,8 +286,8 @@ function buildEventBlockJs(eventName, teamBlob, pool, primary, poolEventKey, poo
     if (!matches && !used) return;
     const n = String(m.name || '').trim();
     if (!n) return;
-    const nl = n.toLowerCase();
-    if (leader && nl === leader.toLowerCase()) return;
+    const nl = normalizeMatchName(n);
+    if (leaderKey && nl === leaderKey) return;
     if (seenLower.has(nl)) return;
     seenLower.add(nl);
     rosterNames.push(n);
@@ -221,15 +319,24 @@ function buildEventsStructureJs(primary, raw, pool) {
 }
 
 function legacyToCanonical(raw) {
-  const primary = parsePrimaryFromLegacy(raw);
+  const parsed = parsePrimaryFromLegacy(raw);
+  const primary = { ...EMPTY_PRIMARY, ...parsed };
+  if (!String(primary.phone || '').trim() && raw.whatsapp) primary.phone = String(raw.whatsapp || '').trim();
+  if (!String(primary.food || '').trim() && raw.food) primary.food = String(raw.food || '').trim();
+  if (!String(primary.collegeName || '').trim() && raw.collegeName) primary.collegeName = String(raw.collegeName || '').trim();
+  if (!String(primary.departmentName || '').trim() && raw.departmentName) {
+    primary.departmentName = String(raw.departmentName || '').trim();
+  }
   const pool = mergedMemberPool(raw);
-  const events = buildEventsStructureJs(primary, raw, pool);
-  const session = raw.sessionData && typeof raw.sessionData === 'object' ? raw.sessionData : {};
+  const rebuilt = buildEventsStructureJs(primary, raw, pool);
+  const events = applyEventsEnrichment(rebuilt, pool, primary);
+  const session = getSessionDataObject(raw);
   return {
     id: raw.id || '',
     createdAt: raw.createdAt || '',
     primaryRegistrant: primary,
     events,
+    _memberPool: pool,
     _meta: {
       paymentScreenshot: raw.paymentScreenshot || '',
       wizardStep: session.step
@@ -237,37 +344,100 @@ function legacyToCanonical(raw) {
   };
 }
 
+function leaderLookupPoolFromClean(clean) {
+  const list = [];
+  (clean._memberPool || []).forEach((m) => list.push(m));
+  (clean.events?.technical?.team?.members || []).forEach((m) => list.push(m));
+  (clean.events?.nonTechnical?.team?.members || []).forEach((m) => list.push(m));
+  const byKey = new Map();
+  list.forEach((m) => {
+    if (!m || typeof m !== 'object') return;
+    const k = normalizeMatchName(m.name);
+    if (!k) return;
+    const prev = byKey.get(k);
+    byKey.set(k, prev ? mergeMemberRecords(prev, m) : { ...m });
+  });
+  return Array.from(byKey.values());
+}
+
 function resolveLeaderContact(clean, leaderName) {
   const name = String(leaderName || '').trim();
   const pr = clean.primaryRegistrant;
-  if (name && name.toLowerCase() === String(pr.name || '').trim().toLowerCase()) {
-    return { name: pr.name, email: pr.email, phone: pr.phone, food: pr.food };
+  if (name && normalizeMatchName(name) === normalizeMatchName(pr.name)) {
+    return {
+      name: pr.name,
+      email: pr.email,
+      phone: pr.phone,
+      food: String(pr.food || '').trim(),
+      collegeName: String(pr.collegeName || '').trim(),
+      departmentName: String(pr.departmentName || '').trim()
+    };
   }
-  const pool = [
-    ...(clean.events.technical?.team?.members || []),
-    ...(clean.events.nonTechnical?.team?.members || [])
-  ];
-  const found = pool.find((m) => String(m.name || '').trim().toLowerCase() === name.toLowerCase());
-  if (found) {
-    return { name: found.name, email: found.email, phone: found.phone, food: found.food };
+  const lookupPool = leaderLookupPoolFromClean(clean);
+  const r = resolveContact(name, lookupPool, pr);
+  if (
+    String(r.email || '').trim() ||
+    String(r.phone || '').trim() ||
+    String(r.food || '').trim() ||
+    String(r.collegeName || '').trim() ||
+    String(r.departmentName || '').trim()
+  ) {
+    return {
+      name: name || r.name || '\u2014',
+      email: String(r.email || '').trim(),
+      phone: String(r.phone || '').trim(),
+      food: String(r.food || '').trim(),
+      collegeName: String(r.collegeName || '').trim(),
+      departmentName: String(r.departmentName || '').trim()
+    };
   }
-  return { name: name || '\u2014', email: '\u2014', phone: '\u2014', food: '\u2014' };
+  return {
+    name: name || '\u2014',
+    email: '\u2014',
+    phone: '\u2014',
+    food: '\u2014',
+    collegeName: '',
+    departmentName: ''
+  };
 }
 
-function personDedupeKey(name, phone, teamId) {
-  const p = String(phone || '')
-    .replace(/\D/g, '')
-    .trim();
-  const n = String(name || '')
-    .trim()
-    .toLowerCase();
-  return `${teamId}|${p}|${n}`;
+/** Dedupe food/participant rows without collapsing different people who share a name. */
+function personDedupeKey(person, teamId) {
+  const tid = String(teamId || '').trim();
+  const name = normalizeMatchName(person?.name);
+  const phone = String(person?.phone || '').replace(/\D/g, '');
+  const email = String(person?.email || '').trim().toLowerCase();
+  if (phone) return `${tid}|p:${phone}|n:${name}`;
+  if (email) return `${tid}|e:${email}|n:${name}`;
+  if (name) return `${tid}|n:${name}`;
+  return '';
 }
 
 function normalizeEventCatalogKey(value) {
   return String(value ?? '')
     .trim()
     .toUpperCase();
+}
+
+/** Display venue for exports (aligned with public event cards where listed). */
+const EVENT_VENUE_LABELS = {
+  Innopitch: 'Main Block Auditorium',
+  Devfolio: 'CSE Main Lab',
+  DevFolio: 'CSE Main Lab',
+  Promptcraft: 'Multimedia Lab',
+  'E-Sports (Free fire)': 'Main Block Auditorium',
+  'IPL Auction': 'Main Block Auditorium',
+  'Channel Surfing': 'Main Block Auditorium',
+  'Visual Content': 'Main Block Auditorium',
+  'Visual Connect': 'Main Block Auditorium'
+};
+
+function getEventVenueLabel(eventName) {
+  const key = String(eventName || '').trim();
+  if (!key) return '';
+  if (Object.prototype.hasOwnProperty.call(EVENT_VENUE_LABELS, key)) return EVENT_VENUE_LABELS[key];
+  const hit = Object.keys(EVENT_VENUE_LABELS).find((k) => k.toUpperCase() === key.toUpperCase());
+  return hit ? EVENT_VENUE_LABELS[hit] : 'Main Block Auditorium';
 }
 
 /** Map normalized name -> first human-readable label seen (list never exposed in UI). */
@@ -330,13 +500,15 @@ function buildMemberTableRows(clean, leaderName, rosterMembers) {
       memberName: String(contact.name || '\u2014').trim() || '\u2014',
       role,
       phone: String(contact.phone || '').trim(),
-      email: String(contact.email || '').trim()
+      email: String(contact.email || '').trim(),
+      collegeName: String(contact.collegeName || '').trim(),
+      departmentName: String(contact.departmentName || '').trim(),
+      food: String(contact.food || '').trim()
     });
   };
   add(leader, 'Leader');
   (rosterMembers || []).forEach((m, i) => {
-    const nl = String(m.name || '').trim().toLowerCase();
-    if (nl && nl === String(leader.name || '').trim().toLowerCase()) return;
+    if (normalizeMatchName(m.name) && normalizeMatchName(m.name) === normalizeMatchName(leader.name)) return;
     add(m, `Member ${i + 1}`);
   });
   return rows;
@@ -361,8 +533,12 @@ function buildCoordinatorTeamsForEvent(registrations, targetNorm, displayLabel) 
         teamId: `${rid.slice(0, 12)}-T`,
         teamName: teamDisplayNameFromRaw(raw, true),
         leaderName: String(leaderContact.name || '\u2014').trim() || '\u2014',
+        leaderYear: String(clean.primaryRegistrant?.year || '').trim(),
         eventDisplay: displayLabel,
         track: 'Technical',
+        collegeName: String(clean.primaryRegistrant?.collegeName || '').trim(),
+        departmentName: String(clean.primaryRegistrant?.departmentName || '').trim(),
+        venue: getEventVenueLabel(b.name),
         memberRows
       });
     }
@@ -377,8 +553,12 @@ function buildCoordinatorTeamsForEvent(registrations, targetNorm, displayLabel) 
         teamId: `${rid.slice(0, 12)}-NT`,
         teamName: teamDisplayNameFromRaw(raw, false),
         leaderName: String(leaderContact.name || '\u2014').trim() || '\u2014',
+        leaderYear: String(clean.primaryRegistrant?.year || '').trim(),
         eventDisplay: displayLabel,
         track: 'Non-technical',
+        collegeName: String(clean.primaryRegistrant?.collegeName || '').trim(),
+        departmentName: String(clean.primaryRegistrant?.departmentName || '').trim(),
+        venue: getEventVenueLabel(b.name),
         memberRows
       });
     }
@@ -394,7 +574,14 @@ function flattenCoordinatorExportRows(teams) {
         'Team ID': t.teamId,
         Event: t.eventDisplay,
         Leader: t.leaderName,
+        'College Name': t.collegeName || '',
+        'Department Name': t.departmentName || '',
+        Venue: t.venue || '',
         'Member Name': r.memberName,
+        'Member College': r.collegeName || '',
+        'Member Department': r.departmentName || '',
+        Meal: formatFoodPreference(r.food),
+        'As recorded': String(r.food || '').trim() || '—',
         Role: r.role,
         Phone: r.phone || '',
         Email: r.email || ''
@@ -404,11 +591,94 @@ function flattenCoordinatorExportRows(teams) {
   return out;
 }
 
+/** Columns aligned with the college attendance sheet template (no extra columns). */
+const ATTENDANCE_SHEET_COLUMNS = ['S.NO', 'NAME', 'YEAR AND DEPT', 'COLLEGE', 'MOBILE NO', 'SIGNATURE'];
+
+function yearAndDeptForAttendance(leaderYear, memberDept, teamDept) {
+  const y = String(leaderYear || '').trim();
+  const md = String(memberDept || '').trim();
+  const td = String(teamDept || '').trim();
+  const dept = md || td;
+  if (y && dept) return `${y} · ${dept}`;
+  return y || dept || '';
+}
+
+/** One row per participant; SIGNATURE left blank for in-person signing. */
+function flattenAttendanceSheetRows(teams) {
+  let serial = 0;
+  const out = [];
+  teams.forEach((t) => {
+    const leaderYear = String(t.leaderYear || '').trim();
+    const teamCollege = String(t.collegeName || '').trim();
+    const teamDept = String(t.departmentName || '').trim();
+    t.memberRows.forEach((r) => {
+      serial += 1;
+      const rawName = String(r.memberName || '').trim();
+      const name = rawName === '\u2014' ? '' : rawName;
+      out.push({
+        'S.NO': serial,
+        NAME: name,
+        'YEAR AND DEPT': yearAndDeptForAttendance(leaderYear, r.departmentName, teamDept),
+        COLLEGE: String(r.collegeName || '').trim() || teamCollege,
+        'MOBILE NO': String(r.phone || '').trim(),
+        SIGNATURE: ''
+      });
+    });
+  });
+  return out;
+}
+
+function normalizeMealInput(foodRaw) {
+  return String(foodRaw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u2013\u2014\u2212]/g, '-')
+    .replace(/\s+/g, ' ');
+}
+
+function classifyMealPreference(foodRaw) {
+  const t = normalizeMealInput(foodRaw);
+  if (!t) return 'empty';
+  const compact = t.replace(/[\s_-]/g, '');
+  if (compact === 'nv' || compact === 'nonveg') return 'nonveg';
+  if (
+    /\bnon[\s_-]*veg\b/.test(t) ||
+    /\bnon[\s_-]*vegetarian\b/.test(t) ||
+    /\bnonvegetarian\b/.test(t)
+  ) {
+    return 'nonveg';
+  }
+  if (/\bmeat\b|\bchicken\b|\bmutton\b|\bbeef\b|\bpork\b|\bfish\b|seafood|\begg(s)?\b|omnivore|halal/i.test(t)) {
+    return 'nonveg';
+  }
+  if (/\bvegetarian\b|\bvegan\b|\bsattvik\b|pure[\s_-]*veg|plant[\s_-]*based/.test(t) || /^veg$|^v$/.test(t)) {
+    return 'veg';
+  }
+  if (/\bveg\b/.test(t) && !t.includes('non')) return 'veg';
+  if (t.includes('veg') && !/non/.test(t)) return 'veg';
+  return 'unknown';
+}
+
+/** Human-readable meal line for UI, CSV, PDF (never shows the word "Unknown"). */
+function formatFoodPreference(foodRaw) {
+  const raw = String(foodRaw ?? '').trim();
+  if (!raw) return '\u2014';
+  const c = classifyMealPreference(raw);
+  if (c === 'veg') return 'Veg';
+  if (c === 'nonveg') return 'Non-Veg';
+  return raw;
+}
+
   global.PixeloraSharedReg = {
     transformRegistration,
     resolveLeaderContact,
+    formatAffiliatedName,
+    formatFoodPreference,
+    classifyMealPreference,
     personDedupeKey,
     normalizeEventCatalogKey,
+    getEventVenueLabel,
     extractEventCatalog,
     registrationTechKey,
     registrationNtKey,
@@ -416,6 +686,8 @@ function flattenCoordinatorExportRows(teams) {
     teamDisplayNameFromRaw,
     buildMemberTableRows,
     buildCoordinatorTeamsForEvent,
-    flattenCoordinatorExportRows
+    flattenCoordinatorExportRows,
+    ATTENDANCE_SHEET_COLUMNS,
+    flattenAttendanceSheetRows
   };
 })(window);

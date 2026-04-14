@@ -373,7 +373,7 @@
         <section class="reg-step hidden" data-step="3">
           <div class="reg-step-head">
             <h4>Team members</h4>
-            <p>Add teammates locally. Their temporary IDs, contact details, and event flags remain in session storage until final submission.</p>
+            <p>Add teammates. The line-up below shows who sits on each technical and non-technical event.</p>
           </div>
           <div class="member-builder">
             <div class="member-builder-head">
@@ -384,6 +384,7 @@
               <button type="button" class="btn bo member-add-btn" id="member-add-btn">Add Member</button>
             </div>
             <div class="team-note" id="team-note"></div>
+            <div id="member-roster-overview" class="member-roster-overview hidden" aria-live="polite"></div>
             <div id="member-list" class="member-list"></div>
             <div class="member-editor hidden" id="member-editor">
               <div class="member-editor-head">
@@ -402,6 +403,14 @@
                 <label class="reg-field">
                   <span>Member Phone</span>
                   <input type="tel" id="member-phone" autocomplete="tel">
+                </label>
+                <label class="reg-field">
+                  <span>Member College</span>
+                  <input type="text" id="member-college-name" autocomplete="organization" placeholder="College / institution">
+                </label>
+                <label class="reg-field">
+                  <span>Member Department</span>
+                  <input type="text" id="member-department-name" autocomplete="off" placeholder="e.g. CSE">
                 </label>
                 <label class="reg-field">
                   <span>Member ID</span>
@@ -440,9 +449,9 @@
             <p style="margin:0.3rem 0; opacity:0.92">Payment per head - Rs.150</p>
             <p id="payment-total" style="margin:0.3rem 0; opacity:0.92; font-weight:700">Total amount - Rs.150</p>
             <div class="reg-upi-block">
-              <span class="reg-upi-label">UPI number</span>
-              <p id="upi-id-text" class="reg-upi-number" aria-label="UPI number for payment">26666671</p>
-              <p class="reg-upi-hint">Scan the QR or pay manually to this UPI number in your app.</p>
+              <span class="reg-upi-label">Pay to (UPI / VPA)</span>
+              <p id="upi-id-text" class="reg-upi-number" aria-label="Organizer UPI ID for payment">sachinvelu6925-2@oksbi</p>
+              <p class="reg-upi-hint">Scan the QR or pay manually to this ID in your UPI app.</p>
             </div>
             <img id="payment-qr" src="Payment_QR.jpeg" alt="Payment QR" style="width:220px; max-width:100%; height:auto; border-radius:10px; border:1px solid var(--border); display:block">
           </div>
@@ -572,7 +581,7 @@
     </div>
     <div id="admin-gate-step-coord" class="admin-gate-step is-hidden">
       <p class="admin-gate-dialog__title">Event coordinator</p>
-      <p class="admin-gate-dialog__hint">Enter the event name as registered. It will be matched against live data.</p>
+      <p class="admin-gate-dialog__hint">Enter the event name as registered. Continue opens the event view; if a Drive URL is set in site config, the matching folder also opens in a new tab. Use AttendSuite on the event page to download the attendance Excel (participant rows only).</p>
       <label class="admin-gate-dialog__field-label" for="admin-gate-coord-event">Enter Event Name</label>
       <input type="text" id="admin-gate-coord-event" class="admin-gate-dialog__input" autocomplete="off" spellcheck="false" autocapitalize="characters" placeholder="EVENT NAME" />
       <div class="admin-gate-dialog__actions">

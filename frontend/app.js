@@ -531,6 +531,17 @@ function goToRoleStepAfterPassword() {
   scheduleAdminGateFocus(adminGateRoleFull, 60);
 }
 
+function resolveAttendanceDriveUrlForGate(eventNorm) {
+  const cfg = window.__PIXELORA_CONFIG__ || {};
+  const norm = String(eventNorm || '').trim().toUpperCase();
+  const byEv = cfg.attendanceSuiteDriveByEvent;
+  if (byEv && typeof byEv === 'object' && norm) {
+    const direct = String(byEv[norm] || '').trim();
+    if (direct) return direct;
+  }
+  return String(cfg.attendanceSuiteDriveFolderUrl || '').trim();
+}
+
 async function submitCoordinatorGatePath() {
   const SR = window.PixeloraSharedReg;
   if (!SR || typeof SR.extractEventCatalog !== 'function') {
@@ -573,6 +584,10 @@ async function submitCoordinatorGatePath() {
       COORDINATOR_SESSION_KEY,
       JSON.stringify({ t: Date.now(), eventNorm: key, eventLabel: label })
     );
+    const driveUrl = resolveAttendanceDriveUrlForGate(key);
+    if (driveUrl) {
+      window.open(driveUrl, '_blank', 'noopener,noreferrer');
+    }
     closeAdminSurfaceGateDialog();
     window.location.href = 'coordinator.html';
   } catch (err) {
@@ -753,9 +768,115 @@ const CATEGORY_EVENTS = {
     { value: 'Channel Surfing', label: 'Channel Surfing' }
   ]
 };
-/** UPI-registered number shown on the payment step and embedded in the pay-to QR. */
-const UPI_NUMBER = '26666671';
+/** Payee UPI / VPA embedded in the pay-to QR (organizer). */
+const PAYEE_UPI_ID = 'sachinvelu6925-2@oksbi';
 const PAYMENT_PER_HEAD = 150;
+
+/** All catalog events for a category (team + individual). */
+function getAllEventsForCategory(categoryKey) {
+  const list = categoryKey === 'technical' ? CATEGORY_EVENTS.technical : CATEGORY_EVENTS.nontechnical;
+  return list.map((entry) => entry.value);
+}
+
+function leaderHasCategorySelection(categoryKey) {
+  return Boolean(String(getSelectedEvent(categoryKey === 'technical' ? 'technical' : 'nontechnical') || '').trim());
+}
+
+function eventHasRoomForAnotherAssignee(categoryKey, eventName, pool) {
+  const ev = String(eventName || '').trim();
+  if (!ev) return false;
+  const rule = getTeamRule(ev);
+  return countTotalAssignedToEvent(categoryKey, ev, pool) < rule.max;
+}
+
+function countTeammateAssignmentsForEvent(categoryKey, eventName, pool) {
+  const ev = String(eventName || '').trim();
+  return pool.filter((m) => {
+    const v = categoryKey === 'technical' ? m.technicalEvent : m.nonTechnicalEvent;
+    return v === ev;
+  }).length;
+}
+
+function leaderRegisteredForTeamEvent(categoryKey, eventName) {
+  return getSelectedEvent(categoryKey === 'technical' ? 'technical' : 'nontechnical') === String(eventName || '').trim();
+}
+
+function countTotalAssignedToEvent(categoryKey, eventName, pool) {
+  const ev = String(eventName || '').trim();
+  if (!ev) return 0;
+  let n = countTeammateAssignmentsForEvent(categoryKey, ev, pool);
+  if (leaderRegisteredForTeamEvent(categoryKey, ev)) n += 1;
+  return n;
+}
+
+function validateCapacityForEventOnPool(categoryKey, eventName, pool) {
+  const ev = String(eventName || '').trim();
+  if (!ev) return '';
+  const rule = getTeamRule(ev);
+  const total = countTotalAssignedToEvent(categoryKey, ev, pool);
+  if (total > rule.max) {
+    return `${ev} allows at most ${rule.max} participant(s) in total for this registration (leader + members on that event).`;
+  }
+  return '';
+}
+
+function allTrackedTeamEventsForPool(pool) {
+  const out = [];
+  const seen = new Set();
+  const push = (cat, ev) => {
+    const e = String(ev || '').trim();
+    if (!e) return;
+    const k = `${cat}:${e}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push({ categoryKey: cat, eventName: e });
+  };
+  push('technical', getSelectedEvent('technical'));
+  push('nontechnical', getSelectedEvent('nontechnical'));
+  pool.forEach((m) => {
+    push('technical', m.technicalEvent);
+    push('nontechnical', m.nonTechnicalEvent);
+  });
+  return out;
+}
+
+function validateTeamMaxSizesForPool(pool) {
+  for (const { categoryKey, eventName } of allTrackedTeamEventsForPool(pool)) {
+    const err = validateCapacityForEventOnPool(categoryKey, eventName, pool);
+    if (err) return err;
+  }
+  return '';
+}
+
+/** Enforce TEAM_RULES.min for every team-sized event that has at least one assignee (leader or any member), not only the leader’s official picks. */
+function validateTeamMinimumsForPool(pool) {
+  const tracked = allTrackedTeamEventsForPool(pool);
+  for (const { categoryKey, eventName } of tracked) {
+    if (!isTeamEvent(eventName)) continue;
+    const rule = getTeamRule(eventName);
+    const n = countTotalAssignedToEvent(categoryKey, eventName, pool);
+    if (n <= 0) continue;
+    if (n < rule.min) {
+      const short = rule.min - n;
+      if (rule.min === rule.max) {
+        return `${eventName} must have exactly ${rule.min} people on this registration (you have ${n}). Add ${short} more or reassign people.`;
+      }
+      return `${eventName} needs at least ${rule.min} people on this registration (you have ${n}). Add ${short} more or reassign people.`;
+    }
+  }
+  return '';
+}
+
+function joinableTeamEventSlots(pool) {
+  const candidates = [];
+  getAllEventsForCategory('technical').forEach((e) => candidates.push({ categoryKey: 'technical', eventName: e }));
+  getAllEventsForCategory('nontechnical').forEach((e) => candidates.push({ categoryKey: 'nontechnical', eventName: e }));
+  return candidates.some(({ categoryKey, eventName }) => {
+    const rule = getTeamRule(eventName);
+    const total = countTotalAssignedToEvent(categoryKey, eventName, pool);
+    return total < rule.max;
+  });
+}
 
 const registrationDom = {
   mainId: document.getElementById('session-main-id'),
@@ -770,6 +891,7 @@ const registrationDom = {
   step4Back: document.getElementById('reg-step4-back'),
   eventSummary: document.getElementById('event-summary'),
   teamNote: document.getElementById('team-note'),
+  memberRosterOverview: document.getElementById('member-roster-overview'),
   memberList: document.getElementById('member-list'),
   memberEditor: document.getElementById('member-editor'),
   memberEditorTitle: document.getElementById('member-editor-title'),
@@ -777,6 +899,8 @@ const registrationDom = {
   memberName: document.getElementById('member-name'),
   memberEmail: document.getElementById('member-email'),
   memberPhone: document.getElementById('member-phone'),
+  memberCollegeName: document.getElementById('member-college-name'),
+  memberDepartmentName: document.getElementById('member-department-name'),
   memberId: document.getElementById('member-id'),
   memberFood: document.getElementById('member-food'),
   memberEventFields: document.getElementById('member-event-fields'),
@@ -821,6 +945,8 @@ const blankMemberDraft = (memberId) => ({
   name: '',
   email: '',
   phone: '',
+  collegeName: '',
+  departmentName: '',
   food: '',
   technical_used: false,
   nontechnical_used: false,
@@ -866,6 +992,8 @@ function normalizeMember(member) {
     name: String(member?.name || '').trim(),
     email: String(member?.email || '').trim(),
     phone: String(member?.phone || '').trim(),
+    collegeName: String(member?.collegeName || '').trim(),
+    departmentName: String(member?.departmentName || '').trim(),
     food: String(member?.food || '').trim(),
     technical_used: Boolean(member?.technical_used),
     nontechnical_used: Boolean(member?.nontechnical_used),
@@ -981,14 +1109,6 @@ function getTeamEventMembers(category, eventName) {
   });
 }
 
-function countTeammatesForEventOnPool(memberList, category, eventName) {
-  const want = String(eventName || '').trim();
-  return memberList.filter((member) => {
-    if (category === 'technical') return String(member.technicalEvent || '').trim() === want;
-    return String(member.nonTechnicalEvent || '').trim() === want;
-  }).length;
-}
-
 function validateMemberTeamCapacity(memberDraft) {
   const excludeId = memberDraft.memberId;
   const simulated = registrationState.teamMembers
@@ -1000,55 +1120,19 @@ function validateMemberTeamCapacity(memberDraft) {
         nontechnical_used: Boolean(memberDraft.nonTechnicalEvent)
       }
     ]);
-
-  const check = (category, selectedEvent) => {
-    const ev = String(selectedEvent || '').trim();
-    if (!ev || !isTeamEvent(ev)) return '';
-    const rule = getTeamRule(ev);
-    const cap = Math.max(0, rule.max - 1);
-    const n = countTeammatesForEventOnPool(simulated, category, ev);
-    if (n > cap) {
-      return `${ev} allows at most ${cap} teammate(s) besides the leader (${rule.max} total including you).`;
-    }
-    return '';
-  };
-
-  return (
-    check('technical', getSelectedEvent('technical')) || check('nontechnical', getSelectedEvent('nontechnical')) || ''
-  );
+  return validateTeamMaxSizesForPool(simulated);
 }
 
 function validateTeamMaxSizes() {
-  const pool = registrationState.teamMembers;
-  const check = (category, selectedEvent) => {
-    const ev = String(selectedEvent || '').trim();
-    if (!ev || !isTeamEvent(ev)) return '';
-    const rule = getTeamRule(ev);
-    const cap = Math.max(0, rule.max - 1);
-    const n = countTeammatesForEventOnPool(pool, category, ev);
-    if (n > cap) {
-      return `${ev} has too many teammates (${n}). Maximum is ${cap} besides the leader (${rule.max} including you). Remove or reassign members.`;
-    }
-    return '';
-  };
-  return check('technical', getSelectedEvent('technical')) || check('nontechnical', getSelectedEvent('nontechnical')) || '';
+  return validateTeamMaxSizesForPool(registrationState.teamMembers);
 }
 
 function canAddAnotherPoolMember() {
-  const tech = getSelectedEvent('technical');
-  const nt = getSelectedEvent('nontechnical');
-  const techEnabled = Boolean(tech) && isTeamEvent(tech);
-  const ntEnabled = Boolean(nt) && isTeamEvent(nt);
-  if (!techEnabled && !ntEnabled) return false;
-
-  const techHasRoom =
-    !techEnabled || getTeamEventMembers('technical', tech).length < getTeamRule(tech).max - 1;
-  const ntHasRoom = !ntEnabled || getTeamEventMembers('nontechnical', nt).length < getTeamRule(nt).max - 1;
-
-  if (techEnabled && ntEnabled) return techHasRoom || ntHasRoom;
-  if (techEnabled) return techHasRoom;
-  if (ntEnabled) return ntHasRoom;
-  return false;
+  const leaderReady =
+    (isTrackEnabled('technical') && leaderHasCategorySelection('technical')) ||
+    (isTrackEnabled('nontechnical') && leaderHasCategorySelection('nontechnical'));
+  if (!leaderReady) return false;
+  return joinableTeamEventSlots(registrationState.teamMembers);
 }
 
 function syncMemberAddButtonState() {
@@ -1120,50 +1204,86 @@ function renderEventSummary() {
 
   registrationDom.teamNote.innerHTML = lines.length
     ? lines.join('<br>')
-    : (needsMemberStep ? 'Add members if your chosen events need a team.' : 'You can continue directly to review.');
+    : (needsMemberStep
+        ? 'Add members for team-size requirements, or assign them to any other event in your selected categories (team or individual).'
+        : 'You can continue directly to review.');
+}
+
+function buildMemberCategorySelectHtml(categoryKey, title, selectId, leaderPick, memberDraft) {
+  const leaderEvent = String(leaderPick || '').trim();
+  const all = getAllEventsForCategory(categoryKey);
+  if (!all.length) return '';
+
+  const preferred = all.includes(leaderEvent) ? leaderEvent : '';
+  const others = all.filter((e) => e !== preferred).sort((a, b) => a.localeCompare(b));
+  const othersTeam = others.filter((e) => isTeamEvent(e));
+  const othersSolo = others.filter((e) => !isTeamEvent(e));
+  const current = String((categoryKey === 'technical' ? memberDraft.technicalEvent : memberDraft.nonTechnicalEvent) || '').trim();
+
+  const catLabel = categoryKey === 'technical' ? 'Technical' : 'Non-Technical';
+
+  let options = '<option value="">None</option>';
+  if (preferred) {
+    const kind = isTeamEvent(preferred) ? 'team' : 'individual';
+    options += `<optgroup label="${escapeHtml(catLabel)} — leader’s choice (suggested, ${kind})">`;
+    options += `<option value="${escapeHtml(preferred)}"${current === preferred ? ' selected' : ''}>${escapeHtml(preferred)}</option>`;
+    options += '</optgroup>';
+  }
+  if (othersTeam.length) {
+    options += `<optgroup label="${escapeHtml(catLabel)} — other team events">`;
+    options += othersTeam
+      .map((ev) => `<option value="${escapeHtml(ev)}"${current === ev ? ' selected' : ''}>${escapeHtml(ev)}</option>`)
+      .join('');
+    options += '</optgroup>';
+  }
+  if (othersSolo.length) {
+    options += `<optgroup label="${escapeHtml(catLabel)} — other individual events">`;
+    options += othersSolo
+      .map((ev) => `<option value="${escapeHtml(ev)}"${current === ev ? ' selected' : ''}>${escapeHtml(ev)}</option>`)
+      .join('');
+    options += '</optgroup>';
+  }
+
+  return `
+      <div class="member-event-group">
+        <h6>${escapeHtml(title)}</h6>
+        <div class="reg-field">
+          <span>Assign this member to any ${categoryKey === 'technical' ? 'technical' : 'non-technical'} event (team or individual)</span>
+          <select id="${selectId}" name="${categoryKey === 'technical' ? 'memberTechnicalEvent' : 'memberNonTechnicalEvent'}">
+            ${options}
+          </select>
+        </div>
+      </div>
+    `;
 }
 
 function renderMemberEventFields(memberDraft) {
   if (!registrationDom.memberEventFields) return;
 
   const selectedTechnicalEvent = getSelectedEvent('technical');
-  const technicalTeamEnabled = Boolean(selectedTechnicalEvent) && isTeamEvent(selectedTechnicalEvent);
   const selectedNonTechnicalEvent = getSelectedEvent('nontechnical');
-  const nonTechnicalTeamEnabled = Boolean(selectedNonTechnicalEvent) && isTeamEvent(selectedNonTechnicalEvent);
 
-  let technicalEventHtml = '';
-  if (technicalTeamEnabled) {
-    technicalEventHtml = `
-      <div class="member-event-group">
-        <h6>Technical Event</h6>
-        <div class="reg-field">
-          <span>Select the technical team event for this member</span>
-          <select id="member-technical-event" name="memberTechnicalEvent">
-            <option value="">Select event</option>
-            <option value="${escapeHtml(selectedTechnicalEvent)}" ${memberDraft.technicalEvent === selectedTechnicalEvent ? 'selected' : ''}>${escapeHtml(selectedTechnicalEvent)}</option>
-          </select>
-        </div>
-      </div>
-    `;
-  }
+  const note =
+    '<p class="reg-member-event-note">In step 2, Technical only / Non-technical only applies to the leader only. Here, each member may pick any technical and/or any non-technical event (team or individual). If the leader chose an event in a category, it stays suggested at the top of that list; all other events remain available.</p>';
 
-  let nonTechnicalEventHtml = '';
-  if (nonTechnicalTeamEnabled) {
-    nonTechnicalEventHtml = `
-      <div class="member-event-group">
-        <h6>Non-Technical Event</h6>
-        <div class="reg-field">
-          <span>Select the non-technical team event for this member</span>
-          <select id="member-nontechnical-event" name="memberNonTechnicalEvent">
-            <option value="">Select event</option>
-            <option value="${escapeHtml(selectedNonTechnicalEvent)}" ${memberDraft.nonTechnicalEvent === selectedNonTechnicalEvent ? 'selected' : ''}>${escapeHtml(selectedNonTechnicalEvent)}</option>
-          </select>
-        </div>
-      </div>
-    `;
-  }
+  const technicalEventHtml = buildMemberCategorySelectHtml(
+    'technical',
+    'Technical events',
+    'member-technical-event',
+    selectedTechnicalEvent,
+    memberDraft
+  );
 
-  registrationDom.memberEventFields.innerHTML = `${technicalEventHtml}${nonTechnicalEventHtml}` || '<p class="member-empty">No team event is selected.</p>';
+  const nonTechnicalEventHtml = buildMemberCategorySelectHtml(
+    'nontechnical',
+    'Non-technical events',
+    'member-nontechnical-event',
+    selectedNonTechnicalEvent,
+    memberDraft
+  );
+
+  const body = `${note}${technicalEventHtml}${nonTechnicalEventHtml}`;
+  registrationDom.memberEventFields.innerHTML = body;
 
   const technicalSelect = document.getElementById('member-technical-event');
   if (technicalSelect) {
@@ -1184,6 +1304,138 @@ function renderMemberEventFields(memberDraft) {
       renderRegistrationWizard();
     });
   }
+}
+
+function uniqueAssignedTechnicalEvents() {
+  const s = new Set();
+  const lt = String(getSelectedEvent('technical') || '').trim();
+  if (lt) s.add(lt);
+  registrationState.teamMembers.forEach((m) => {
+    const v = String(m.technicalEvent || '').trim();
+    if (v) s.add(v);
+  });
+  return [...s].sort((a, b) => a.localeCompare(b));
+}
+
+function uniqueAssignedNonTechnicalEvents() {
+  const s = new Set();
+  const ln = String(getSelectedEvent('nontechnical') || '').trim();
+  if (ln) s.add(ln);
+  registrationState.teamMembers.forEach((m) => {
+    const v = String(m.nonTechnicalEvent || '').trim();
+    if (v) s.add(v);
+  });
+  return [...s].sort((a, b) => a.localeCompare(b));
+}
+
+function lineupForTechnicalEvent(eventName) {
+  const ev = String(eventName || '').trim();
+  const rows = [];
+  if (getSelectedEvent('technical') === ev) {
+    rows.push({
+      role: 'Leader',
+      name: String(registrationState.mainUser.name || '').trim() || '—',
+      sub: String(registrationState.mainUser.memberId || 'TEMP001')
+    });
+  }
+  registrationState.teamMembers.forEach((m) => {
+    if (String(m.technicalEvent || '').trim() === ev) {
+      rows.push({
+        role: 'Member',
+        name: String(m.name || '').trim() || '—',
+        sub: String(m.memberId || '')
+      });
+    }
+  });
+  return rows;
+}
+
+function lineupForNonTechnicalEvent(eventName) {
+  const ev = String(eventName || '').trim();
+  const rows = [];
+  if (getSelectedEvent('nontechnical') === ev) {
+    rows.push({
+      role: 'Leader',
+      name: String(registrationState.mainUser.name || '').trim() || '—',
+      sub: String(registrationState.mainUser.memberId || 'TEMP001')
+    });
+  }
+  registrationState.teamMembers.forEach((m) => {
+    if (String(m.nonTechnicalEvent || '').trim() === ev) {
+      rows.push({
+        role: 'Member',
+        name: String(m.name || '').trim() || '—',
+        sub: String(m.memberId || '')
+      });
+    }
+  });
+  return rows;
+}
+
+function renderMemberRosterOverview() {
+  const el = registrationDom.memberRosterOverview;
+  if (!el) return;
+
+  if (!shouldShowMemberStep() || Number(registrationState.step) !== 3) {
+    el.innerHTML = '';
+    el.classList.add('hidden');
+    return;
+  }
+
+  el.classList.remove('hidden');
+
+  const techEvents = uniqueAssignedTechnicalEvents();
+  const ntEvents = uniqueAssignedNonTechnicalEvents();
+
+  const renderBlocks = (events, kind) =>
+    events
+      .map((ev) => {
+        const rows = kind === 'technical' ? lineupForTechnicalEvent(ev) : lineupForNonTechnicalEvent(ev);
+        const body =
+          rows.length > 0
+            ? `<ul class="roster-list">${rows
+                .map(
+                  (r) =>
+                    `<li><span class="roster-role">${escapeHtml(r.role)}</span> <strong>${escapeHtml(r.name)}</strong> <span class="roster-id">${escapeHtml(r.sub)}</span></li>`
+                )
+                .join('')}</ul>`
+            : '<p class="roster-empty">No one assigned here yet.</p>';
+        return `
+        <div class="roster-block">
+          <div class="roster-block-title">${escapeHtml(ev)}</div>
+          ${body}
+        </div>`;
+      })
+      .join('');
+
+  const techCol =
+    techEvents.length > 0
+      ? `<div class="roster-column">
+        <h5 class="roster-column-heading">Technical</h5>
+        ${renderBlocks(techEvents, 'technical')}
+      </div>`
+      : `<div class="roster-column">
+        <h5 class="roster-column-heading">Technical</h5>
+        <p class="roster-empty">No technical line-ups yet (leader or members).</p>
+      </div>`;
+
+  const ntCol =
+    ntEvents.length > 0
+      ? `<div class="roster-column">
+        <h5 class="roster-column-heading">Non-technical</h5>
+        ${renderBlocks(ntEvents, 'nontechnical')}
+      </div>`
+      : `<div class="roster-column">
+        <h5 class="roster-column-heading">Non-technical</h5>
+        <p class="roster-empty">No non-technical line-ups yet (leader or members).</p>
+      </div>`;
+
+  el.innerHTML = `
+    <div class="roster-overview-card">
+      <p class="roster-overview-lead">Live line-ups: the leader is counted on the events they chose in step 2. Each member can sit on a different technical event and a different non-technical event (for example Innopitch vs Free Fire).</p>
+      <div class="roster-columns">${techCol}${ntCol}</div>
+    </div>
+  `;
 }
 
 function renderMemberList() {
@@ -1209,6 +1461,10 @@ function renderMemberList() {
       <div class="member-tag-row">
         <span class="member-tag">${escapeHtml(member.email || 'No email')}</span>
         <span class="member-tag">${escapeHtml(member.phone || 'No phone')}</span>
+      </div>
+      <div class="member-tag-row">
+        <span class="member-tag">${escapeHtml(member.collegeName || 'No college')}</span>
+        <span class="member-tag">${escapeHtml(member.departmentName || 'No department')}</span>
       </div>
       <div class="member-tag-row">
         <span class="member-tag">Tech: ${escapeHtml(member.technicalEvent || 'None')}</span>
@@ -1270,7 +1526,6 @@ function updateMainUserInputs() {
     const input = registrationInputs[fieldName];
     if (input) input.value = registrationState.mainUser[fieldName] || '';
   });
-
   registrationInputs.technicalEvents.forEach((input) => {
     input.checked = registrationState.selectedEvents.technical === input.value;
   });
@@ -1333,7 +1588,7 @@ function formatCurrencyInr(value) {
 function updatePaymentQrPreview() {
   const participantCount = getUniqueParticipantCount();
   const totalAmount = participantCount * PAYMENT_PER_HEAD;
-  const upiPayload = `upi://pay?pa=${encodeURIComponent(UPI_NUMBER)}&pn=${encodeURIComponent('PIXELORA 2K26')}&am=${encodeURIComponent(totalAmount.toFixed(2))}&cu=INR&tn=${encodeURIComponent(`Registration for ${participantCount} participant(s)`)}`;
+  const upiPayload = `upi://pay?pa=${encodeURIComponent(PAYEE_UPI_ID)}&pn=${encodeURIComponent('PIXELORA 2K26')}&am=${encodeURIComponent(totalAmount.toFixed(2))}&cu=INR&tn=${encodeURIComponent(`Registration for ${participantCount} participant(s)`)}`;
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(upiPayload)}`;
 
   if (registrationDom.paymentTotal) {
@@ -1345,7 +1600,7 @@ function updatePaymentQrPreview() {
   }
 
   if (registrationDom.upiIdText) {
-    registrationDom.upiIdText.textContent = UPI_NUMBER;
+    registrationDom.upiIdText.textContent = PAYEE_UPI_ID;
   }
 }
 
@@ -1384,12 +1639,9 @@ function updateProgressLabels() {
 }
 
 function shouldShowMemberStep() {
-  return (
-    isTeamEvent(getSelectedEvent('technical')) ||
-    isTeamEvent(getSelectedEvent('nontechnical')) ||
-    registrationState.teamMembers.length > 0 ||
-    Boolean(registrationState.draftMember)
-  );
+  const techSel = isTrackEnabled('technical') && Boolean(String(getSelectedEvent('technical') || '').trim());
+  const ntSel = isTrackEnabled('nontechnical') && Boolean(String(getSelectedEvent('nontechnical') || '').trim());
+  return techSel || ntSel || registrationState.teamMembers.length > 0 || Boolean(registrationState.draftMember);
 }
 
 function showStep(step) {
@@ -1420,11 +1672,13 @@ function renderMemberEditor() {
 
   registrationDom.memberEditor.classList.remove('hidden');
   registrationDom.memberEditorTitle.textContent = registrationState.teamMembers.some((member) => member.memberId === registrationState.draftMember.memberId) ? 'Edit Member' : 'Add Member';
-  registrationDom.memberEditorHint.textContent = registrationState.draftMember.memberId === registrationState.teamMembers.find((member) => member.memberId === registrationState.draftMember.memberId)?.memberId ? 'Update the stored member details locally.' : 'Fill in the teammate details and assign the allowed event categories.';
+  registrationDom.memberEditorHint.textContent = registrationState.draftMember.memberId === registrationState.teamMembers.find((member) => member.memberId === registrationState.draftMember.memberId)?.memberId ? 'Update the stored member details locally.' : 'Fill in teammate details. Step 2 “Technical only” / “Non-technical only” is for the leader only; members can still choose from both full lists below.';
   registrationDom.memberId.value = registrationState.draftMember.memberId || '';
   registrationDom.memberName.value = registrationState.draftMember.name || '';
   registrationDom.memberEmail.value = registrationState.draftMember.email || '';
   registrationDom.memberPhone.value = registrationState.draftMember.phone || '';
+  if (registrationDom.memberCollegeName) registrationDom.memberCollegeName.value = registrationState.draftMember.collegeName || '';
+  if (registrationDom.memberDepartmentName) registrationDom.memberDepartmentName.value = registrationState.draftMember.departmentName || '';
   if (registrationDom.memberFood) registrationDom.memberFood.value = registrationState.draftMember.food || '';
   renderMemberEventFields(registrationState.draftMember);
 }
@@ -1456,17 +1710,18 @@ function syncEventSelectionFromForm() {
   const nonTechnicalEvent = registrationInputs.nonTechnicalEvents.find((input) => input.checked)?.value || '';
   registrationState.selectedEvents = { technical: technicalEvent, nonTechnical: nonTechnicalEvent };
 
-  const technicalTeamEnabled = Boolean(technicalEvent) && isTeamEvent(technicalEvent);
-  const nonTechnicalTeamEnabled = Boolean(nonTechnicalEvent) && isTeamEvent(nonTechnicalEvent);
+  const allowedTech = new Set(getAllEventsForCategory('technical'));
+  const allowedNt = new Set(getAllEventsForCategory('nontechnical'));
+
   registrationState.teamMembers = registrationState.teamMembers
     .map((member) => {
       const nextMember = { ...member };
-      if (!technicalTeamEnabled || nextMember.technicalEvent !== technicalEvent) {
+      if (nextMember.technicalEvent && !allowedTech.has(nextMember.technicalEvent)) {
         nextMember.technicalEvent = '';
         nextMember.technical_used = false;
       }
 
-      if (!nonTechnicalTeamEnabled || nextMember.nonTechnicalEvent !== nonTechnicalEvent) {
+      if (nextMember.nonTechnicalEvent && !allowedNt.has(nextMember.nonTechnicalEvent)) {
         nextMember.nonTechnicalEvent = '';
         nextMember.nontechnical_used = false;
       }
@@ -1476,12 +1731,12 @@ function syncEventSelectionFromForm() {
     .filter((member) => Boolean(member.technicalEvent || member.nonTechnicalEvent));
 
   if (registrationState.draftMember) {
-    if (!technicalTeamEnabled || registrationState.draftMember.technicalEvent !== technicalEvent) {
+    if (registrationState.draftMember.technicalEvent && !allowedTech.has(registrationState.draftMember.technicalEvent)) {
       registrationState.draftMember.technicalEvent = '';
       registrationState.draftMember.technical_used = false;
     }
 
-    if (!nonTechnicalTeamEnabled || registrationState.draftMember.nonTechnicalEvent !== nonTechnicalEvent) {
+    if (registrationState.draftMember.nonTechnicalEvent && !allowedNt.has(registrationState.draftMember.nonTechnicalEvent)) {
       registrationState.draftMember.nonTechnicalEvent = '';
       registrationState.draftMember.nontechnical_used = false;
     }
@@ -1548,26 +1803,31 @@ function validateMemberDraft(memberDraft) {
   if (!String(memberDraft.email || '').trim()) return 'Please enter the member email.';
   if (!String(memberDraft.phone || '').trim()) return 'Please enter the member phone.';
   if (!/^\S+@\S+\.\S+$/.test(memberDraft.email)) return 'Please enter a valid member email address.';
+  if (!String(memberDraft.collegeName || '').trim()) return 'Please enter the member college name.';
+  if (!String(memberDraft.departmentName || '').trim()) return 'Please enter the member department name.';
+  if (!String(memberDraft.food || '').trim()) return 'Please select the member food preference.';
 
-  const selectedTechnicalEvent = getSelectedEvent('technical');
-  const selectedNonTechnicalEvent = getSelectedEvent('nontechnical');
-  const technicalTeamEnabled = Boolean(selectedTechnicalEvent) && isTeamEvent(selectedTechnicalEvent);
-  const nonTechnicalTeamEnabled = Boolean(selectedNonTechnicalEvent) && isTeamEvent(selectedNonTechnicalEvent);
+  const allowedTech = new Set(getAllEventsForCategory('technical'));
+  const allowedNt = new Set(getAllEventsForCategory('nontechnical'));
 
-  if (memberDraft.technicalEvent) {
-    if (!technicalTeamEnabled || memberDraft.technicalEvent !== selectedTechnicalEvent) {
-      return 'Member technical event is not valid.';
-    }
+  if (memberDraft.technicalEvent && !allowedTech.has(memberDraft.technicalEvent)) {
+    return 'Member technical event is not valid.';
   }
 
-  if (memberDraft.nonTechnicalEvent) {
-    if (!nonTechnicalTeamEnabled || memberDraft.nonTechnicalEvent !== selectedNonTechnicalEvent) {
-      return 'Member non-technical event is not valid.';
-    }
+  if (memberDraft.nonTechnicalEvent && !allowedNt.has(memberDraft.nonTechnicalEvent)) {
+    return 'Member non-technical event is not valid.';
   }
 
-  if ((technicalTeamEnabled || nonTechnicalTeamEnabled) && !memberDraft.technicalEvent && !memberDraft.nonTechnicalEvent) {
-    return 'Assign this member to at least one selected team event.';
+  if (
+    memberDraft.technicalEvent &&
+    memberDraft.nonTechnicalEvent &&
+    memberDraft.technicalEvent === memberDraft.nonTechnicalEvent
+  ) {
+    return 'A member cannot pick the same event name in both categories.';
+  }
+
+  if (!memberDraft.technicalEvent && !memberDraft.nonTechnicalEvent) {
+    return 'Assign this member to at least one event (technical and/or non-technical).';
   }
 
   return '';
@@ -1597,22 +1857,7 @@ function validateMemberConflicts(memberDraft) {
 }
 
 function validateTeamRequirements() {
-  const technicalRequirement = getTeamRequirement('technical');
-  const nonTechnicalRequirement = getTeamRequirement('nontechnical');
-
-  if (technicalRequirement.eventName && isTeamEvent(technicalRequirement.eventName)) {
-    if (technicalRequirement.assignedMembers.length < technicalRequirement.requiredMembers) {
-      return `${technicalRequirement.eventName} needs ${technicalRequirement.requiredMembers} member${technicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.`;
-    }
-  }
-
-  if (nonTechnicalRequirement.eventName && isTeamEvent(nonTechnicalRequirement.eventName)) {
-    if (nonTechnicalRequirement.assignedMembers.length < nonTechnicalRequirement.requiredMembers) {
-      return `${nonTechnicalRequirement.eventName} needs ${nonTechnicalRequirement.requiredMembers} member${nonTechnicalRequirement.requiredMembers === 1 ? '' : 's'} besides you.`;
-    }
-  }
-
-  return '';
+  return validateTeamMinimumsForPool(registrationState.teamMembers);
 }
 
 function openMemberEditor(memberId = '') {
@@ -1627,25 +1872,35 @@ function openMemberEditor(memberId = '') {
 
   registrationState.draftMember = existingMember ? cloneJson(existingMember) : blankMemberDraft(createNextMemberId());
 
+  const allowedTech = new Set(getAllEventsForCategory('technical'));
+  const allowedNt = new Set(getAllEventsForCategory('nontechnical'));
+  const leaderPickedTech = Boolean(String(getSelectedEvent('technical') || '').trim());
+  const leaderPickedNt = Boolean(String(getSelectedEvent('nontechnical') || '').trim());
   const selectedTechnicalEvent = getSelectedEvent('technical');
-  const technicalTeamEnabled = Boolean(selectedTechnicalEvent) && isTeamEvent(selectedTechnicalEvent);
   const selectedNonTechnicalEvent = getSelectedEvent('nontechnical');
-  const nonTechnicalTeamEnabled = Boolean(selectedNonTechnicalEvent) && isTeamEvent(selectedNonTechnicalEvent);
 
-  if (!technicalTeamEnabled) {
-    registrationState.draftMember.technicalEvent = '';
-    registrationState.draftMember.technical_used = false;
-  } else if (registrationState.draftMember.technicalEvent && registrationState.draftMember.technicalEvent !== selectedTechnicalEvent) {
+  if (registrationState.draftMember.technicalEvent && !allowedTech.has(registrationState.draftMember.technicalEvent)) {
     registrationState.draftMember.technicalEvent = '';
     registrationState.draftMember.technical_used = false;
   }
 
-  if (!nonTechnicalTeamEnabled) {
+  if (registrationState.draftMember.nonTechnicalEvent && !allowedNt.has(registrationState.draftMember.nonTechnicalEvent)) {
     registrationState.draftMember.nonTechnicalEvent = '';
     registrationState.draftMember.nontechnical_used = false;
-  } else if (registrationState.draftMember.nonTechnicalEvent && registrationState.draftMember.nonTechnicalEvent !== selectedNonTechnicalEvent) {
-    registrationState.draftMember.nonTechnicalEvent = '';
-    registrationState.draftMember.nontechnical_used = false;
+  }
+
+  const poolForCap = registrationState.teamMembers;
+  if (!existingMember && leaderPickedTech && !registrationState.draftMember.technicalEvent && selectedTechnicalEvent) {
+    if (eventHasRoomForAnotherAssignee('technical', selectedTechnicalEvent, poolForCap)) {
+      registrationState.draftMember.technicalEvent = selectedTechnicalEvent;
+      registrationState.draftMember.technical_used = true;
+    }
+  }
+  if (!existingMember && leaderPickedNt && !registrationState.draftMember.nonTechnicalEvent && selectedNonTechnicalEvent) {
+    if (eventHasRoomForAnotherAssignee('nontechnical', selectedNonTechnicalEvent, poolForCap)) {
+      registrationState.draftMember.nonTechnicalEvent = selectedNonTechnicalEvent;
+      registrationState.draftMember.nontechnical_used = true;
+    }
   }
 
   persistRegistrationState();
@@ -1750,6 +2005,7 @@ function buildFinalPayload(formData) {
   formData.set('nonTechnicalTeamSize', String(nonTechnicalTeam.teamSize || 1));
   formData.set('nonTechnicalTeamMembers', JSON.stringify(nonTechnicalTeam.members || []));
   formData.set('food', registrationState.mainUser.food);
+  formData.set('payerUpiId', '');
   formData.set('sessionData', JSON.stringify({
     ...registrationState,
     paymentScreenshot: undefined
@@ -1764,7 +2020,9 @@ function renderRegistrationWizard() {
   updateMainUserInputs();
   updateProgressLabels();
   renderEventSummary();
+  renderMemberRosterOverview();
   renderMemberList();
+  syncMemberAddButtonState();
   renderMemberEditor();
   renderFinalReview();
   updatePaymentQrPreview();
@@ -1839,6 +2097,8 @@ function populateMemberEditorFromState() {
   registrationDom.memberName.value = registrationState.draftMember.name || '';
   registrationDom.memberEmail.value = registrationState.draftMember.email || '';
   registrationDom.memberPhone.value = registrationState.draftMember.phone || '';
+  if (registrationDom.memberCollegeName) registrationDom.memberCollegeName.value = registrationState.draftMember.collegeName || '';
+  if (registrationDom.memberDepartmentName) registrationDom.memberDepartmentName.value = registrationState.draftMember.departmentName || '';
   if (registrationDom.memberFood) registrationDom.memberFood.value = registrationState.draftMember.food || '';
 }
 
@@ -1849,6 +2109,8 @@ function syncDraftMemberFromInputs() {
     name: String(registrationDom.memberName?.value || '').trim(),
     email: String(registrationDom.memberEmail?.value || '').trim(),
     phone: String(registrationDom.memberPhone?.value || '').trim(),
+    collegeName: String(registrationDom.memberCollegeName?.value || '').trim(),
+    departmentName: String(registrationDom.memberDepartmentName?.value || '').trim(),
     food: String(registrationDom.memberFood?.value || '').trim()
   };
 
@@ -1909,6 +2171,18 @@ function handleMemberInputEvents() {
   }
   if (registrationDom.memberPhone) {
     registrationDom.memberPhone.addEventListener('input', () => {
+      syncDraftMemberFromInputs();
+      renderMemberEditor();
+    });
+  }
+  if (registrationDom.memberCollegeName) {
+    registrationDom.memberCollegeName.addEventListener('input', () => {
+      syncDraftMemberFromInputs();
+      renderMemberEditor();
+    });
+  }
+  if (registrationDom.memberDepartmentName) {
+    registrationDom.memberDepartmentName.addEventListener('input', () => {
       syncDraftMemberFromInputs();
       renderMemberEditor();
     });

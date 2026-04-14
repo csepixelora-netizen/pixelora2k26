@@ -1,9 +1,34 @@
 const COORDINATOR_SESSION_KEY = 'pixelora-coordinator-session';
 const SURFACE_AUTH_HEADER = 'CSE';
 
-const COORD_EXPORT_COLS = ['Team ID', 'Event', 'Leader', 'Member Name', 'Role', 'Phone', 'Email'];
+const COORD_EXPORT_COLS = [
+  'Team ID',
+  'Event',
+  'Leader',
+  'College Name',
+  'Department Name',
+  'Venue',
+  'Member Name',
+  'Member College',
+  'Member Department',
+  'Meal',
+  'As recorded',
+  'Role',
+  'Phone',
+  'Email'
+];
 
 const APP_CONFIG = window.__PIXELORA_CONFIG__ || {};
+
+function resolveAttendanceDriveUrl(eventNorm) {
+  const norm = String(eventNorm || '').trim().toUpperCase();
+  const byEv = APP_CONFIG.attendanceSuiteDriveByEvent;
+  if (byEv && typeof byEv === 'object' && norm) {
+    const direct = String(byEv[norm] || '').trim();
+    if (direct) return direct;
+  }
+  return String(APP_CONFIG.attendanceSuiteDriveFolderUrl || '').trim();
+}
 const configuredApiBaseUrl = String(APP_CONFIG.apiBaseUrl || '').trim().replace(/\/+$/, '');
 const isLocalHost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const API_BASE_URL = isLocalHost ? '' : configuredApiBaseUrl;
@@ -17,7 +42,10 @@ const {
   extractEventCatalog,
   buildCoordinatorTeamsForEvent,
   flattenCoordinatorExportRows,
-  normalizeEventCatalogKey
+  flattenAttendanceSheetRows,
+  ATTENDANCE_SHEET_COLUMNS,
+  normalizeEventCatalogKey,
+  formatFoodPreference
 } = SR;
 
 function buildApiUrl(path) {
@@ -110,17 +138,24 @@ function renderCoordinatorResults(teams) {
         <div class="coord-team-head__line"><span class="coord-muted">Team ID</span> <strong>${escapeHtml(t.teamId)}</strong></div>
         <div class="coord-team-head__line"><span class="coord-muted">Team</span> <strong>${escapeHtml(t.teamName)}</strong></div>
         <div class="coord-team-head__line"><span class="coord-muted">Leader</span> <strong>${escapeHtml(t.leaderName)}</strong></div>
+        <div class="coord-team-head__line"><span class="coord-muted">College</span> <strong>${escapeHtml(t.collegeName || '—')}</strong></div>
+        <div class="coord-team-head__line"><span class="coord-muted">Department</span> <strong>${escapeHtml(t.departmentName || '—')}</strong></div>
+        <div class="coord-team-head__line"><span class="coord-muted">Venue</span> <strong>${escapeHtml(t.venue || '—')}</strong></div>
         <div class="coord-team-head__line coord-team-head__track"><span class="admin-pill admin-pill--dense">${escapeHtml(t.track)}</span></div>
       </header>
       <div class="admin-panel admin-panel--table admin-panel--dense">
         <table class="admin-data-table admin-data-table--dense">
-          <thead><tr><th>Member Name</th><th>Role</th><th>Phone</th><th>Email</th></tr></thead>
+          <thead><tr><th>Member Name</th><th>College</th><th>Department</th><th>Meal</th><th>As recorded</th><th>Role</th><th>Phone</th><th>Email</th></tr></thead>
           <tbody>
             ${t.memberRows
               .map(
                 (r) => `
               <tr>
                 <td>${escapeHtml(r.memberName)}</td>
+                <td>${escapeHtml(r.collegeName || '—')}</td>
+                <td>${escapeHtml(r.departmentName || '—')}</td>
+                <td>${escapeHtml(formatFoodPreference(r.food))}</td>
+                <td>${escapeHtml(String(r.food || '').trim() || '—')}</td>
                 <td>${escapeHtml(r.role)}</td>
                 <td>${escapeHtml(r.phone || '—')}</td>
                 <td>${escapeHtml(r.email || '—')}</td>
@@ -154,11 +189,27 @@ function downloadCoordinatorGroupedPdf(teams, eventLabel, filename) {
     }
     doc.setFontSize(9);
     doc.text(`${t.teamId} · ${t.teamName} · Leader: ${t.leaderName} · ${t.track}`, 40, y);
+    y += 11;
+    doc.setFontSize(8);
+    doc.text(
+      `College: ${t.collegeName || '—'} · Dept: ${t.departmentName || '—'} · Venue: ${t.venue || '—'}`,
+      40,
+      y
+    );
     y += 12;
-    const body = t.memberRows.map((r) => [r.memberName, r.role, r.phone || '', r.email || '']);
+    const body = t.memberRows.map((r) => [
+      r.memberName,
+      r.collegeName || '',
+      r.departmentName || '',
+      formatFoodPreference(r.food),
+      String(r.food || '').trim(),
+      r.role,
+      r.phone || '',
+      r.email || ''
+    ]);
     doc.autoTable({
       startY: y,
-      head: [['Member Name', 'Role', 'Phone', 'Email']],
+      head: [['Member Name', 'College', 'Department', 'Meal', 'As recorded', 'Role', 'Phone', 'Email']],
       body,
       styles: { fontSize: 8, cellPadding: 3 },
       headStyles: { fillColor: [79, 91, 137] },
@@ -171,6 +222,7 @@ function downloadCoordinatorGroupedPdf(teams, eventLabel, filename) {
 
 let coordinatorTeams = [];
 let coordinatorFlatRows = [];
+let coordinatorAttendanceRows = [];
 let coordinatorSelectionNorm = '';
 let coordinatorSelectionLabel = '';
 
@@ -201,11 +253,15 @@ async function loadCoordinatorData() {
       setCoordStatus('This event is no longer present in registrations. Close and pick again from the site.', 'err');
       coordinatorTeams = [];
       coordinatorFlatRows = [];
+      coordinatorAttendanceRows = [];
       renderCoordinatorResults([]);
       const xb = document.getElementById('coord-export-xlsx');
       const pb = document.getElementById('coord-export-pdf');
+      const ab = document.getElementById('coord-export-attendance');
       if (xb) xb.disabled = true;
       if (pb) pb.disabled = true;
+      if (ab) ab.disabled = true;
+      syncAttendSuiteChrome();
       return;
     }
     coordinatorTeams = buildCoordinatorTeamsForEvent(
@@ -214,13 +270,19 @@ async function loadCoordinatorData() {
       coordinatorSelectionLabel
     );
     coordinatorFlatRows = flattenCoordinatorExportRows(coordinatorTeams);
+    coordinatorAttendanceRows = flattenAttendanceSheetRows(coordinatorTeams);
     renderCoordinatorResults(coordinatorTeams);
     setCoordStatus(`Showing ${coordinatorTeams.length} team(s) for “${coordinatorSelectionLabel}”.`, 'ok');
     const xb = document.getElementById('coord-export-xlsx');
     const pb = document.getElementById('coord-export-pdf');
+    const ab = document.getElementById('coord-export-attendance');
     if (xb) xb.disabled = !coordinatorFlatRows.length;
     if (pb) pb.disabled = !coordinatorTeams.length;
+    if (ab) ab.disabled = !coordinatorAttendanceRows.length;
+    syncAttendSuiteChrome();
   } catch (err) {
+    coordinatorAttendanceRows = [];
+    syncAttendSuiteChrome();
     setCoordStatus(err.message || 'Unable to load teams.', 'err');
   }
 }
@@ -250,6 +312,36 @@ document.getElementById('coord-export-pdf')?.addEventListener('click', () => {
     `pixelora-event-${normalizeEventCatalogKey(coordinatorSelectionLabel).replace(/[^A-Z0-9]+/g, '-')}-${stamp}.pdf`
   );
   setCoordStatus('PDF export started.', 'ok');
+});
+
+function syncAttendSuiteChrome() {
+  const suite = document.getElementById('coord-attendsuite');
+  const driveA = document.getElementById('coord-drive-link');
+  if (!suite) return;
+  const driveUrl = resolveAttendanceDriveUrl(coordinatorSelectionNorm);
+  const showSuite = Boolean(driveUrl) || coordinatorAttendanceRows.length > 0;
+  suite.hidden = !showSuite;
+  if (driveA) {
+    if (driveUrl) {
+      driveA.href = driveUrl;
+      driveA.hidden = false;
+    } else {
+      driveA.hidden = true;
+      driveA.removeAttribute('href');
+    }
+  }
+}
+
+document.getElementById('coord-export-attendance')?.addEventListener('click', () => {
+  if (!coordinatorAttendanceRows.length) return;
+  const stamp = exportStamp();
+  downloadRowsXlsx(
+    `Attendance-${normalizeEventCatalogKey(coordinatorSelectionLabel).replace(/[^A-Z0-9]+/g, '-')}-${stamp}.xlsx`,
+    ATTENDANCE_SHEET_COLUMNS,
+    coordinatorAttendanceRows,
+    'Attendance'
+  );
+  setCoordStatus('Attendance Excel export started.', 'ok');
 });
 
 void loadCoordinatorData();
